@@ -1,23 +1,27 @@
 import { useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router';
-import { ArrowLeft, TrendingUp, TrendingDown, AlertTriangle, Target, Users, Sparkles, WandSparkles } from 'lucide-react';
+import { ArrowLeft, TrendingUp, TrendingDown, AlertTriangle, Target, Users, Sparkles, WandSparkles, ExternalLink } from 'lucide-react';
 import { SectionHeader } from '../components/SectionHeader';
+import { formatCount, formatPercent, formatUsd } from '../lib/format';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingState } from '../components/LoadingState';
 import { useApi, useMutation } from '../hooks/useApi';
 import { predictionApi, raidApi, tokenApi } from '../services/api';
+import type { Token } from '../types';
 
-function narrativeForSlug(slug?: string) {
-  switch (slug) {
-    case 'pepeai':
-      return 'PepeAI is riding the convergence of AI hype and meme culture. Strong community momentum and a clean meme identity keep attention sticky while exchange rumors keep traders alert.';
-    case 'moon-cat':
-      return 'Moon Cat Protocol is being carried by social proof, visual branding, and celebrity adjacency. It behaves like a meme that communities want to wear, not just trade.';
-    case 'wojak-terminal':
-      return 'Wojak Terminal has a sharp trader aesthetic but weaker emotional pull. It needs stronger community proof to stop feeling like a chart-first meme.';
-    default:
-      return 'This launch has signal, but the crowd still needs a cleaner reason to stay. Watch identity strength versus raw attention.';
+function narrativeForToken(token?: Token) {
+  if (!token) return 'This launch has signal, but the crowd still needs a cleaner reason to stay. Watch identity strength versus raw attention.';
+  if (token.narrativeSummary) return token.narrativeSummary;
+
+  if (token.momentum === 'rising') {
+    return `${token.name} is acting like a live Four.meme winner right now. Attention is still rising, holder count is broad enough to matter, and the chart has not fully broken the social loop.`;
   }
+
+  if (token.momentum === 'falling') {
+    return `${token.name} still has a visible crowd, but the signal is cooling. Sloan would treat this as a rebound watch until fresh volume proves the meme is alive again.`;
+  }
+
+  return `${token.name} is sitting in the middle lane. The community has enough surface area to matter, but it still needs a sharper catalyst to force a strong move.`;
 }
 
 export function TokenPage() {
@@ -32,14 +36,14 @@ export function TokenPage() {
 
   const loading = tokenLoading || convictionLoading || swarmLoading || loreLoading;
   const isPositive = (token?.priceChange24h || 0) > 0;
-  const narrative = useMemo(() => narrativeForSlug(token?.slug), [token?.slug]);
+  const narrative = useMemo(() => narrativeForToken(token), [token]);
 
   async function handleGenerateContent() {
     if (!token) return;
     const result = await generateContent({
       token: token.name,
       platform: 'X',
-      vibe: 'bold',
+      vibe: token.momentum === 'rising' ? 'charged' : 'measured',
       objective: 'push smart attention',
     });
 
@@ -79,63 +83,79 @@ export function TokenPage() {
   return (
     <div className="p-8 space-y-6">
       <div>
-        <Link to="/dashboard" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors mb-4">
+        <Link to="/dashboard" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6">
           <ArrowLeft className="w-4 h-4" />
           Back to Command Center
         </Link>
 
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="flex items-start justify-between gap-4 mb-6">
           <div>
-            <div className="flex items-center gap-3 mb-2">
+            <div className="flex items-center gap-3 mb-2 flex-wrap">
               <h1 className="text-3xl text-foreground">{token.name}</h1>
-              <span className="px-3 py-1 rounded-lg bg-accent-dim text-muted-foreground font-mono">${token.ticker}</span>
+              <span className="px-2.5 py-1 rounded-full bg-primary/10 text-primary text-sm font-mono">${token.ticker}</span>
+              {token.source === 'four.meme' && (
+                <span className="px-2.5 py-1 rounded-full bg-success/10 text-success text-xs">live Four.meme</span>
+              )}
+              {token.fourMemeStatus && (
+                <span className="px-2.5 py-1 rounded-full bg-secondary/10 text-secondary text-xs">{token.fourMemeStatus}</span>
+              )}
             </div>
-            <div className="flex items-center gap-4">
-              <p className="text-4xl font-mono text-foreground">${token.price.toFixed(4)}</p>
-              <span className={`flex items-center gap-1 px-3 py-1.5 rounded text-lg font-mono ${isPositive ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>
-                {isPositive ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                {isPositive && '+'}{token.priceChange24h.toFixed(2)}%
-              </span>
+            <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
+              <span>Market Cap: {formatUsd(token.marketCap)}</span>
+              <span>Volume 24h: {formatUsd(token.volume24h)}</span>
+              <span>Holders: {formatCount(token.holders, { compact: false })}</span>
+              {token.lastSyncedAt && <span>Synced: {new Date(token.lastSyncedAt).toLocaleString()}</span>}
             </div>
           </div>
+          {token.sourceUrl && (
+            <a
+              href={token.sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-card hover:border-primary/40 transition-all text-sm"
+            >
+              Open on Four.meme
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          )}
+        </div>
 
-          <div className="flex items-center gap-2">
-            <button onClick={handleGenerateContent} className="px-4 py-2 rounded-lg border border-border hover:border-primary/40 transition-all">
-              {generatingContent ? 'Generating...' : 'Generate Content'}
-            </button>
-            <Link to="/dashboard/raid-studio" className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all">
-              Start Raid
-            </Link>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="p-4 rounded-lg bg-card border border-card-border">
+            <p className="text-sm text-muted-foreground mb-1">Price</p>
+            <p className="text-2xl text-foreground">{formatUsd(token.price, { compact: false })}</p>
+          </div>
+          <div className="p-4 rounded-lg bg-card border border-card-border">
+            <p className="text-sm text-muted-foreground mb-1">24h Change</p>
+            <div className={`flex items-center gap-2 ${isPositive ? 'text-success' : 'text-destructive'}`}>
+              {isPositive ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
+              <p className="text-2xl">{formatPercent(token.priceChange24h, { showPlus: true })}</p>
+            </div>
+          </div>
+          <div className="p-4 rounded-lg bg-card border border-card-border">
+            <p className="text-sm text-muted-foreground mb-1">Momentum</p>
+            <p className="text-2xl text-foreground capitalize">{token.momentum}</p>
+          </div>
+          <div className="p-4 rounded-lg bg-card border border-card-border">
+            <p className="text-sm text-muted-foreground mb-1">Trade posture</p>
+            <p className="text-lg text-foreground">
+              {token.momentum === 'rising' ? 'Early but hot' : token.momentum === 'falling' ? 'Wait for proof' : 'Watch closely'}
+            </p>
           </div>
         </div>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-4 rounded-lg bg-card border border-card-border"><p className="text-sm text-muted-foreground mb-1">Market Cap</p><p className="text-xl font-mono text-foreground">${(token.marketCap / 1000000).toFixed(2)}M</p></div>
-        <div className="p-4 rounded-lg bg-card border border-card-border"><p className="text-sm text-muted-foreground mb-1">24h Volume</p><p className="text-xl font-mono text-foreground">${(token.volume24h / 1000000).toFixed(2)}M</p></div>
-        <div className="p-4 rounded-lg bg-card border border-card-border"><p className="text-sm text-muted-foreground mb-1">Holders</p><p className="text-xl font-mono text-foreground">{token.holders.toLocaleString()}</p></div>
-        <div className="p-4 rounded-lg bg-card border border-card-border"><p className="text-sm text-muted-foreground mb-1">Momentum</p><p className="text-xl text-foreground capitalize">{token.momentum}</p></div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <div className="p-6 rounded-lg bg-card border border-card-border">
-            <SectionHeader title="Narrative Scan" subtitle="AI-powered narrative analysis" icon={<Sparkles className="w-5 h-5" />} />
-            <div className="p-4 rounded-lg bg-accent-dim border border-border">
-              <p className="text-foreground leading-relaxed">{narrative}</p>
-            </div>
+            <SectionHeader title="Narrative Scan" subtitle="Why this token is getting attention" icon={<Sparkles className="w-5 h-5" />} />
+            <p className="text-foreground-muted leading-relaxed">{narrative}</p>
           </div>
 
           {conviction && (
             <div className="p-6 rounded-lg bg-card border border-card-border">
-              <div className="flex items-center justify-between mb-6">
-                <SectionHeader title="Conviction Analysis" />
-                <div className="text-right">
-                  <p className="text-3xl font-mono text-primary">{conviction.convictionScore}</p>
-                  <p className="text-xs text-muted-foreground">Score</p>
-                </div>
-              </div>
-              <div className="space-y-4">
+              <SectionHeader title="Conviction Card" subtitle={`Score ${conviction.convictionScore}/100`} icon={<Target className="w-5 h-5" />} />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div><div className="flex items-center gap-2 mb-2"><TrendingUp className="w-4 h-4 text-success" /><h3 className="text-sm text-success">Bull Case</h3></div><ul className="space-y-1.5 ml-6">{conviction.bullCase.map((point, i) => <li key={i} className="text-sm text-foreground-muted list-disc">{point}</li>)}</ul></div>
                 <div><div className="flex items-center gap-2 mb-2"><TrendingDown className="w-4 h-4 text-destructive" /><h3 className="text-sm text-destructive">Bear Case</h3></div><ul className="space-y-1.5 ml-6">{conviction.bearCase.map((point, i) => <li key={i} className="text-sm text-foreground-muted list-disc">{point}</li>)}</ul></div>
                 <div><div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-4 h-4 text-warning" /><h3 className="text-sm text-warning">Key Risks</h3></div><ul className="space-y-1.5 ml-6">{conviction.risks.map((point, i) => <li key={i} className="text-sm text-foreground-muted list-disc">{point}</li>)}</ul></div>
@@ -148,8 +168,8 @@ export function TokenPage() {
           <div className="p-6 rounded-lg bg-card border border-card-border">
             <SectionHeader title="Content Generator" subtitle="AI-powered raid content" icon={<WandSparkles className="w-5 h-5" />} />
             <div className="space-y-3">
-              <button onClick={handleGenerateContent} className="w-full p-4 rounded-lg border border-border hover:border-primary/40 bg-background-subtle transition-all text-left">
-                <p className="text-sm text-foreground mb-1">Generate X Thread</p>
+              <button onClick={handleGenerateContent} disabled={generatingContent} className="w-full p-4 rounded-lg border border-border hover:border-primary/40 bg-background-subtle transition-all text-left disabled:opacity-60">
+                <p className="text-sm text-foreground mb-1">{generatingContent ? 'Generating X content...' : 'Generate X Thread'}</p>
                 <p className="text-xs text-muted-foreground">Create a sharper raid angle from current token posture</p>
               </button>
               {contentOutput.length > 0 && (
@@ -183,13 +203,13 @@ export function TokenPage() {
           <div className="p-6 rounded-lg bg-card border border-card-border">
             <SectionHeader title="Make Prediction" />
             <div className="space-y-3">
-              <button onClick={() => handleQuickPrediction('moon')} disabled={creatingPrediction} className="w-full px-4 py-3 rounded-lg bg-success/10 text-success border border-success/20 hover:bg-success/20 transition-all">MOON 🚀</button>
-              <button onClick={() => handleQuickPrediction('sideways')} disabled={creatingPrediction} className="w-full px-4 py-3 rounded-lg bg-warning/10 text-warning border border-warning/20 hover:bg-warning/20 transition-all">SIDEWAYS ↔️</button>
-              <button onClick={() => handleQuickPrediction('dump')} disabled={creatingPrediction} className="w-full px-4 py-3 rounded-lg bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive/20 transition-all">DUMP 📉</button>
+              <button onClick={() => handleQuickPrediction('moon')} disabled={creatingPrediction} className="w-full px-4 py-3 rounded-lg bg-success/10 text-success border border-success/20 hover:bg-success/20 transition-all disabled:opacity-60">MOON 🚀</button>
+              <button onClick={() => handleQuickPrediction('sideways')} disabled={creatingPrediction} className="w-full px-4 py-3 rounded-lg bg-warning/10 text-warning border border-warning/20 hover:bg-warning/20 transition-all disabled:opacity-60">SIDEWAYS ↔️</button>
+              <button onClick={() => handleQuickPrediction('dump')} disabled={creatingPrediction} className="w-full px-4 py-3 rounded-lg bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive/20 transition-all disabled:opacity-60">DUMP 📉</button>
             </div>
           </div>
 
-          {lore && (
+          {lore && lore.length > 0 && (
             <div className="p-6 rounded-lg bg-card border border-card-border">
               <SectionHeader title="Lore Stream" subtitle="Recent events" />
               <div className="space-y-3">

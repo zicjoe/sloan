@@ -6,6 +6,7 @@ import { TokenPage } from './pages/TokenPage';
 import { LaunchForge } from './pages/LaunchForge';
 import { RaidStudio } from './pages/RaidStudio';
 import { QuestArena } from './pages/QuestArena';
+import { QuestDetailPage } from './pages/QuestDetailPage';
 import { ProphetLeague } from './pages/ProphetLeague';
 import { MirrorFeed } from './pages/MirrorFeed';
 import { PassportPage } from './pages/PassportPage';
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
       { path: 'forge', Component: LaunchForge },
       { path: 'raid-studio', Component: RaidStudio },
       { path: 'quests', Component: QuestArena },
+      { path: 'quests/:questId', Component: QuestDetailPage },
       { path: 'prophets', Component: ProphetLeague },
       { path: 'mirror', Component: MirrorFeed },
       { path: 'passport/:username', Component: PassportPage },
