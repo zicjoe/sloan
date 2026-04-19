@@ -1,4 +1,5 @@
 import { env, getSupabaseFunctionsBaseUrl, hasSupabaseBackend } from './env';
+import { getSupabaseBrowserClient } from './supabaseClient';
 
 type QueryValue = string | number | boolean | null | undefined;
 
@@ -32,10 +33,24 @@ function buildUrl(table: string, options: SelectOptions = {}) {
   return url.toString();
 }
 
-function headers(extra: Record<string, string> = {}) {
+async function headers(extra: Record<string, string> = {}) {
+  let bearer = env.supabaseAnonKey;
+
+  try {
+    const supabase = getSupabaseBrowserClient();
+    if (supabase) {
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.access_token) {
+        bearer = data.session.access_token;
+      }
+    }
+  } catch {
+    // Fall back to anon key when no browser session is available.
+  }
+
   return {
     apikey: env.supabaseAnonKey,
-    Authorization: `Bearer ${env.supabaseAnonKey}`,
+    Authorization: `Bearer ${bearer}`,
     'Content-Type': 'application/json',
     ...extra,
   };
@@ -63,7 +78,7 @@ export async function selectRows<T>(table: string, options: SelectOptions = {}, 
 
   const response = await fetch(buildUrl(table, options), {
     method: 'GET',
-    headers: headers(options.single ? { Accept: 'application/vnd.pgrst.object+json' } : {}),
+    headers: await headers(options.single ? { Accept: 'application/vnd.pgrst.object+json' } : {}),
   });
 
   return handleResponse<T>(response, fallback);
@@ -77,7 +92,7 @@ export async function insertRow<T>(table: string, payload: object, fallback?: T)
 
   const response = await fetch(`${env.supabaseUrl}/rest/v1/${table}`, {
     method: 'POST',
-    headers: headers({ Prefer: 'return=representation' }),
+    headers: await headers({ Prefer: 'return=representation' }),
     body: JSON.stringify(payload),
   });
 
@@ -99,7 +114,7 @@ export async function updateRows<T>(table: string, filters: Record<string, Query
 
   const response = await fetch(url.toString(), {
     method: 'PATCH',
-    headers: headers({ Prefer: 'return=representation' }),
+    headers: await headers({ Prefer: 'return=representation' }),
     body: JSON.stringify(payload),
   });
 
@@ -116,9 +131,30 @@ export async function invokeFunction<T>(name: string, body: object, fallback?: T
 
   const response = await fetch(`${baseUrl}/${name}`, {
     method: 'POST',
-    headers: headers(),
+    headers: await headers(),
     body: JSON.stringify(body),
   });
 
   return handleResponse<T>(response, fallback);
+}
+
+export async function upsertRows<T>(table: string, payload: object | object[], options: { onConflict?: string } = {}, fallback?: T): Promise<T> {
+  if (!hasSupabaseBackend) {
+    if (fallback !== undefined) return fallback;
+    throw new Error('Supabase is not configured');
+  }
+
+  const url = new URL(`${env.supabaseUrl}/rest/v1/${table}`);
+  if (options.onConflict) {
+    url.searchParams.set('on_conflict', options.onConflict);
+  }
+
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: await headers({ Prefer: 'resolution=merge-duplicates,return=representation' }),
+    body: JSON.stringify(payload),
+  });
+
+  const data = await handleResponse<any[]>(response);
+  return (Array.isArray(data) && !Array.isArray(payload) ? data[0] : (data as any)) as T;
 }

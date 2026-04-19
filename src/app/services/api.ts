@@ -22,6 +22,8 @@ import type {
   PredictionConfidence,
   Prophet,
   Quest,
+  QuestForgeInput,
+  QuestSuggestionPack,
   QuestActivity,
   QuestLeaderboardEntry,
   QuestLiveEvent,
@@ -31,19 +33,23 @@ import type {
   SwarmBehavior,
   Token,
   UserProfile,
+  PassportActivityItem,
 } from '../types';
 import { env, hasApiBaseBackend, hasSupabaseBackend } from '../lib/env';
 import { readStorage, writeStorage } from '../lib/persistence';
-import { insertRow, invokeFunction, selectRows, updateRows } from '../lib/supabase';
+import { insertRow, invokeFunction, selectRows, updateRows, upsertRows } from '../lib/supabase';
 import { formatPercent, formatUsd } from '../lib/format';
+import { getCurrentActor } from '../auth/authStore';
 
 const STORAGE_KEYS = {
   predictions: 'sloan.predictions',
   predictionMeta: 'sloan.predictions.meta',
   forge: 'sloan.forge.identity',
   raids: 'sloan.raids.generated',
+  raidsHistory: 'sloan.raids.history',
   questJoins: 'sloan.quests.joins',
   questSubmissions: 'sloan.quests.submissions',
+  quests: 'sloan.quests.owner',
 };
 
 const DEMO_TOKEN_SLUGS = new Set(['pepeai', 'wojak-terminal', 'doge-vader', 'moon-cat', 'frog-cartel']);
@@ -76,6 +82,25 @@ function sanitizeQuests(quests: Quest[]) {
 function sanitizeProfiles(profile?: UserProfile) {
   if (!profile || isDemoUsername(profile.username)) return undefined;
   return profile;
+}
+
+function currentUsername() {
+  return getCurrentActor().username;
+}
+
+function currentUserId() {
+  return getCurrentActor().userId;
+}
+
+function isAuthenticatedActor() {
+  return Boolean(getCurrentActor().isAuthenticated && currentUserId() && currentUserId() !== env.currentUser);
+}
+
+function currentActorFilters(usernameColumn = 'created_by', userIdColumn = 'created_by_user_id') {
+  if (isAuthenticatedActor()) {
+    return { [userIdColumn]: currentUserId() } as Record<string, string>;
+  }
+  return { [usernameColumn]: currentUsername() } as Record<string, string>;
 }
 
 function sanitizeCounterfactuals(entries: CounterfactualEntry[]) {
@@ -111,6 +136,229 @@ function uniqueCounterfactualEntries(entries: CounterfactualEntry[]) {
   }
 
   return output;
+}
+
+function getQuestMirrorPotential(quest?: Quest, token?: Token, direction: 'upside' | 'drawdown' = 'upside') {
+  const rewardBase = Math.max(quest?.reward || 0, 220);
+  const tokenBase = token ? estimateCounterfactualDelta(token, direction) : rewardBase;
+  return direction === 'upside'
+    ? Math.max(rewardBase, Math.round(tokenBase * 0.7))
+    : -Math.max(Math.round(rewardBase * 0.75), Math.round(Math.abs(tokenBase) * 0.55));
+}
+
+function buildMirrorEntriesFromOwnedActivity(args: {
+  username: string;
+  tokens: Token[];
+  predictions: Prediction[];
+  joins: LocalQuestJoin[];
+  submissions: LocalQuestSubmissionRecord[];
+  quests: Quest[];
+  raidRows: DbRaidGeneration[];
+}) {
+  const tokenMap = new Map((args.tokens || []).map((token) => [token.slug, token]));
+  const questMap = new Map((args.quests || []).map((quest) => [quest.id, quest]));
+  const entries: CounterfactualEntry[] = [];
+  const ownPredictions = (args.predictions || []).filter((prediction) => prediction.username === args.username);
+  const ownJoins = (args.joins || []).filter((join) => join.username === args.username);
+  const ownSubmissions = (args.submissions || []).filter((submission) => submission.username === args.username);
+  const raidRows = args.raidRows || [];
+  const submissionByQuestId = new Map<string, LocalQuestSubmissionRecord>();
+
+  for (const submission of ownSubmissions) {
+    const existing = submissionByQuestId.get(submission.questId);
+    if (!existing || new Date(submission.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
+      submissionByQuestId.set(submission.questId, submission);
+    }
+  }
+
+  const predictionTokenSet = new Set(ownPredictions.map((prediction) => prediction.tokenSlug));
+  const questTokenSet = new Set(
+    ownJoins
+      .map((join) => questMap.get(join.questId)?.tokenSlug)
+      .filter((value): value is string => Boolean(value)),
+  );
+  const raidTokenSet = new Set(
+    raidRows
+      .map((row) => row.token_slug)
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  for (const prediction of ownPredictions) {
+    const token = tokenMap.get(prediction.tokenSlug);
+    if (!token) continue;
+
+    const answeredYes = prediction.binaryAnswer === 'yes' || prediction.prediction === 'bullish';
+    const answeredNo = prediction.binaryAnswer === 'no' || prediction.prediction === 'bearish';
+    const optimisticMove = token.priceChange24h > 8 || token.volume24h > (prediction.baselineVolume24h || 0) * 1.2 || token.holders > (prediction.baselineHolders || 0) + 18;
+    const weakMove = token.priceChange24h < -8 || token.volume24h < (prediction.baselineVolume24h || token.volume24h) * 0.82 || token.momentum === 'falling';
+
+    if (answeredNo && optimisticMove) {
+      entries.push({
+        id: `mirror-prediction-${prediction.id}-over-caution`,
+        tokenName: token.name,
+        tokenSlug: token.slug,
+        missedAction: `Answered no on ${token.name} even though the setup kept strengthening after your call.`,
+        potentialGain: estimateCounterfactualDelta(token, 'upside'),
+        timestamp: prediction.timestamp,
+        insight: prediction.question
+          ? `Your answer on “${prediction.question}” stayed too defensive while live participation improved. Sloan reads that as over-caution after confirmation.`
+          : `You leaned defensive even as ${token.name} kept proving demand. Sloan reads that as over-caution after confirmation.`,
+        sourceSurface: 'prediction',
+        sourceAction: 'answered_no',
+        patternBucket: 'over_caution',
+        nextMove: 'When price, volume, and holders keep confirming the setup, let that be enough confirmation to act earlier.',
+        confidence: 84,
+      });
+    }
+
+    if (answeredYes && weakMove) {
+      const patternBucket = token.priceChange24h < -12 ? 'late_exit' : 'peak_chasing';
+      entries.push({
+        id: `mirror-prediction-${prediction.id}-${patternBucket}`,
+        tokenName: token.name,
+        tokenSlug: token.slug,
+        missedAction: patternBucket === 'late_exit'
+          ? `Stayed yes on ${token.name} after the setup weakened and the live tape stopped confirming it.`
+          : `Stayed yes on ${token.name} even after the move looked stretched and follow-through started cooling.`,
+        potentialGain: estimateCounterfactualDelta(token, 'drawdown'),
+        timestamp: prediction.timestamp,
+        insight: patternBucket === 'late_exit'
+          ? `You kept the bullish read after the signal weakened. Sloan reads that as a late-exit problem, not just a wrong call.`
+          : `The crowd already stretched the move before your conviction cooled. Sloan reads that as peak-chasing risk.`,
+        sourceSurface: 'prediction',
+        sourceAction: 'answered_yes',
+        patternBucket,
+        nextMove: patternBucket === 'late_exit'
+          ? 'Define the exit condition before the next move so profit-taking does not become emotional.'
+          : 'Wait for a reset or a cleaner confirmation before taking the next stretched setup.',
+        confidence: 81,
+      });
+    }
+  }
+
+  for (const join of ownJoins) {
+    const quest = questMap.get(join.questId);
+    const submission = submissionByQuestId.get(join.questId);
+    const token = quest?.tokenSlug ? tokenMap.get(quest.tokenSlug) : undefined;
+
+    if (!submission) {
+      entries.push({
+        id: `mirror-quest-${join.questId}-joined-no-submit`,
+        tokenName: token?.name || quest?.tokenName || quest?.title || 'Quest mission',
+        tokenSlug: token?.slug || quest?.tokenSlug || '',
+        missedAction: `Joined ${quest?.title || 'a quest'} but never followed through with proof.`,
+        potentialGain: getQuestMirrorPotential(quest, token, 'upside'),
+        timestamp: join.joinedAt,
+        insight: `Sloan reads this as hesitation after commitment. You were close enough to join, but the action never turned into a finished receipt.`,
+        sourceSurface: 'quest',
+        sourceAction: 'joined_no_submit',
+        patternBucket: 'hesitation',
+        nextMove: 'Treat quest joins like commitments. If you enter the mission, define the proof before you leave the page.',
+        confidence: 72,
+      });
+    }
+
+    if (submission?.status === 'rejected') {
+      entries.push({
+        id: `mirror-quest-${submission.id}-rejected`,
+        tokenName: token?.name || quest?.tokenName || quest?.title || 'Quest mission',
+        tokenSlug: token?.slug || quest?.tokenSlug || '',
+        missedAction: `Submitted proof on ${quest?.title || 'a quest'}, but the receipt was too thin to count as completed participation.`,
+        potentialGain: getQuestMirrorPotential(quest, token, 'upside'),
+        timestamp: submission.createdAt,
+        insight: submission.reviewSummary || 'The mission was started, but the proof did not land cleanly enough to score. Sloan reads that as follow-through quality leakage.',
+        sourceSurface: 'quest',
+        sourceAction: 'rejected_submission',
+        patternBucket: 'hesitation',
+        nextMove: 'Before submitting the next proof, make sure the receipt is specific, visible, and easy for Sloan to verify.',
+        confidence: 68,
+      });
+    }
+  }
+
+  for (const raid of raidRows.slice(0, 4)) {
+    if (!raid.token_slug || predictionTokenSet.has(raid.token_slug)) continue;
+    const token = tokenMap.get(raid.token_slug);
+    if (!token) continue;
+    const hasLiveStrength = token.priceChange24h > 6 || token.volume24h > 0 || token.momentum === 'rising';
+    if (!hasLiveStrength) continue;
+
+    entries.push({
+      id: `mirror-raid-${raid.id}-no-prophet-call`,
+      tokenName: token.name,
+      tokenSlug: token.slug,
+      missedAction: `Built raid content for ${token.name} but never turned that conviction into a scoreable Prophet call.`,
+      potentialGain: estimateCounterfactualDelta(token, 'upside'),
+      timestamp: raid.created_at,
+      insight: `Sloan sees distribution effort here, but not a recorded yes or no call. That means the content push was not tied to a measurable conviction loop.`,
+      sourceSurface: 'raid',
+      sourceAction: 'raid_without_prediction',
+      patternBucket: 'hesitation',
+      nextMove: 'When you already have enough context to write the raid, make the scoreable call too so Sloan can judge your read later.',
+      confidence: 66,
+    });
+  }
+
+  const watchedToken = [...tokenMap.values()]
+    .filter((token) => !predictionTokenSet.has(token.slug) && !questTokenSet.has(token.slug) && !raidTokenSet.has(token.slug) && token.priceChange24h > 8)
+    .sort((a, b) => (b.volume24h + Math.max(0, b.priceChange24h) * 1600) - (a.volume24h + Math.max(0, a.priceChange24h) * 1600))[0];
+
+  if (watchedToken && ownPredictions.length + ownJoins.length + raidRows.length > 0) {
+    entries.push({
+      id: `mirror-token-watch-${watchedToken.slug}`,
+      tokenName: watchedToken.name,
+      tokenSlug: watchedToken.slug,
+      missedAction: `Skipped ${watchedToken.name} while participation kept building and the move stayed readable.`,
+      potentialGain: estimateCounterfactualDelta(watchedToken, 'upside'),
+      timestamp: watchedToken.lastSyncedAt || new Date().toISOString(),
+      insight: `This is not about touching every hot token. It is about noticing when a readable setup went untouched even though you were already active elsewhere in Sloan.`,
+      sourceSurface: 'token_watch',
+      sourceAction: 'watch_no_action',
+      patternBucket: 'hesitation',
+      nextMove: 'Pick one overlooked token from the live feed and make one clean call instead of passively watching the board.',
+      confidence: 63,
+    });
+  }
+
+  return uniqueCounterfactualEntries(entries)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 12);
+}
+
+async function syncMirrorEntriesForCurrentActor(entries: CounterfactualEntry[]) {
+  if (!hasSupabaseBackend || !hasAuthenticatedActor() || !currentUserId()) return;
+
+  const payload = entries
+    .filter((entry) => entry.tokenSlug)
+    .map((entry) => ({
+      id: entry.id,
+      user_id: currentUserId(),
+      username: currentUsername(),
+      token_slug: entry.tokenSlug,
+      token_name: entry.tokenName,
+      pattern_bucket: entry.patternBucket || 'hesitation',
+      source_surface: entry.sourceSurface || 'token_watch',
+      source_id: entry.id,
+      source_action: entry.sourceAction || 'derived',
+      missed_action: entry.missedAction,
+      potential_gain: entry.potentialGain,
+      insight: entry.insight,
+      next_move: entry.nextMove || null,
+      confidence: entry.confidence ?? 60,
+      metadata: {},
+      timestamp: entry.timestamp,
+      updated_at: new Date().toISOString(),
+    }));
+
+  if (payload.length === 0) return;
+
+  try {
+    await upsertRows('mirror_entries', payload, {
+      onConflict: 'user_id,source_surface,source_id,source_action,pattern_bucket',
+    }, []);
+  } catch {
+    // Mirror persistence should stay best-effort and never block the page.
+  }
 }
 
 function buildDerivedCounterfactuals(tokens: Token[], predictions: Prediction[], username: string) {
@@ -266,6 +514,37 @@ interface DbQuest {
   progress?: number | null;
   completed: boolean;
   token_slug?: string | null;
+  mission_brief?: string | null;
+  submission_rule?: string | null;
+  example_proof?: string | null;
+  proof_type?: Quest['proofType'] | null;
+  difficulty?: Quest['difficulty'] | null;
+  created_by_user_id?: string | null;
+  created_by_username?: string | null;
+  ai_suggested?: boolean | null;
+  owner_note?: string | null;
+}
+
+interface DbQuestParticipant {
+  id?: string;
+  quest_id: string;
+  user_id: string;
+  username: string;
+  joined_at: string;
+}
+
+interface DbQuestSubmission {
+  id: string;
+  quest_id: string;
+  user_id: string;
+  username: string;
+  proof_type: QuestSubmission['proofType'];
+  proof_value: string;
+  note?: string | null;
+  status: QuestSubmission['status'];
+  xp_awarded: number;
+  review_summary?: string | null;
+  created_at: string;
 }
 
 interface DbPrediction {
@@ -281,6 +560,18 @@ interface DbPrediction {
   timestamp: string;
   likes: number;
   status: Prediction['status'];
+  call_type?: PredictionCallType | null;
+  confidence?: PredictionConfidence | null;
+  compare_token_slug?: string | null;
+  compare_token_name?: string | null;
+  expires_at?: string | null;
+  baseline_price?: number | null;
+  baseline_volume_24h?: number | null;
+  baseline_holders?: number | null;
+  resolution_note?: string | null;
+  score_awarded?: number | null;
+  question?: string | null;
+  binary_answer?: 'yes' | 'no' | null;
 }
 
 interface DbProphet {
@@ -306,6 +597,39 @@ interface DbUserProfile {
   badges: string[];
 }
 
+interface DbAuthProfile {
+  id: string;
+  username: string;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  bio?: string | null;
+  created_at?: string | null;
+}
+
+interface DbXpEvent {
+  id: string;
+  user_id: string;
+  username: string;
+  source_type: string;
+  source_id: string;
+  action: string;
+  xp_delta: number;
+  detail?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+interface DbPassportBadge {
+  id?: string;
+  user_id: string;
+  username: string;
+  badge_key: string;
+  badge_label: string;
+  context?: Record<string, unknown> | null;
+  created_at?: string;
+}
+
+
 interface DbCounterfactual {
   id: string;
   token_name: string;
@@ -314,6 +638,27 @@ interface DbCounterfactual {
   potential_gain: number;
   timestamp: string;
   insight: string;
+}
+
+interface DbMirrorEntry {
+  id: string;
+  user_id: string;
+  username: string;
+  token_slug?: string | null;
+  token_name: string;
+  pattern_bucket: 'hesitation' | 'peak_chasing' | 'late_exit' | 'over_caution';
+  source_surface: 'prediction' | 'quest' | 'raid' | 'token_watch';
+  source_id: string;
+  source_action: string;
+  missed_action: string;
+  potential_gain: number;
+  insight: string;
+  next_move?: string | null;
+  confidence?: number | null;
+  metadata?: Record<string, unknown> | null;
+  timestamp: string;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 interface DbRaidCampaign {
@@ -326,21 +671,58 @@ interface DbRaidCampaign {
   engagement: number;
 }
 
+interface DbRaidGeneration {
+  id: string;
+  created_by_user_id?: string | null;
+  created_by_username?: string | null;
+  token_slug?: string | null;
+  token_name: string;
+  token_ticker?: string | null;
+  platform: string;
+  vibe: string;
+  objective: string;
+  audience?: string | null;
+  contrast?: string | null;
+  call_to_action_input?: string | null;
+  narrative_summary?: string | null;
+  momentum?: string | null;
+  volume_24h?: number | null;
+  holders?: number | null;
+  price_change_24h?: number | null;
+  source_rank_label?: string | null;
+  mission_brief: string;
+  variants: string[];
+  reply_lines: string[];
+  quote_replies: string[];
+  raid_angles: string[];
+  do_not_say: string[];
+  call_to_action: string;
+  created_at: string;
+}
+
 interface DbLaunchIdentity {
   id: string;
   created_by: string;
+  created_by_user_id?: string | null;
   concept: string;
   target_audience: string;
   vibe: string;
   project_name: string;
+  project_summary?: string | null;
+  hero_line?: string | null;
   meme_dna: string[];
   name_options: string[];
   ticker_options: string[];
   lore: string[];
   slogans: string[];
+  community_hooks?: string[] | null;
+  ritual_ideas?: string[] | null;
+  enemy_framing?: string[] | null;
   launch_copy: string[];
+  launch_checklist?: string[] | null;
   aesthetic_direction: string[];
   created_at: string;
+  updated_at?: string | null;
 }
 
 interface DbSyncRun {
@@ -418,6 +800,15 @@ function mapQuest(row: DbQuest): Quest {
     progress: row.progress ?? undefined,
     completed: row.completed,
     tokenSlug: row.token_slug ?? undefined,
+    missionBrief: row.mission_brief ?? undefined,
+    submissionRule: row.submission_rule ?? undefined,
+    exampleProof: row.example_proof ?? undefined,
+    proofType: row.proof_type ?? undefined,
+    difficulty: row.difficulty ?? undefined,
+    createdByUserId: row.created_by_user_id ?? undefined,
+    createdByUsername: row.created_by_username ?? undefined,
+    aiSuggested: row.ai_suggested ?? undefined,
+    ownerNote: row.owner_note ?? undefined,
   };
 }
 
@@ -435,6 +826,41 @@ function mapPrediction(row: DbPrediction): Prediction {
     timestamp: row.timestamp,
     likes: row.likes,
     status: row.status,
+    callType: row.call_type ?? undefined,
+    confidence: row.confidence ?? undefined,
+    compareTokenSlug: row.compare_token_slug ?? undefined,
+    compareTokenName: row.compare_token_name ?? undefined,
+    expiresAt: row.expires_at ?? undefined,
+    baselinePrice: row.baseline_price ?? undefined,
+    baselineVolume24h: row.baseline_volume_24h ?? undefined,
+    baselineHolders: row.baseline_holders ?? undefined,
+    resolutionNote: row.resolution_note ?? undefined,
+    scoreAwarded: row.score_awarded ?? undefined,
+    question: row.question ?? undefined,
+    binaryAnswer: row.binary_answer ?? undefined,
+  };
+}
+
+function mapQuestJoin(row: DbQuestParticipant): LocalQuestJoin {
+  return {
+    questId: row.quest_id,
+    username: row.username,
+    joinedAt: row.joined_at,
+  };
+}
+
+function mapQuestSubmissionRow(row: DbQuestSubmission): LocalQuestSubmissionRecord {
+  return {
+    id: row.id,
+    questId: row.quest_id,
+    username: row.username,
+    proofType: row.proof_type,
+    proofValue: row.proof_value,
+    note: row.note ?? undefined,
+    status: row.status,
+    xpAwarded: row.xp_awarded,
+    reviewSummary: row.review_summary ?? undefined,
+    createdAt: row.created_at,
   };
 }
 
@@ -477,6 +903,23 @@ function mapCounterfactual(row: DbCounterfactual): CounterfactualEntry {
   };
 }
 
+function mapMirrorEntry(row: DbMirrorEntry): CounterfactualEntry {
+  return {
+    id: row.id,
+    tokenName: row.token_name,
+    tokenSlug: row.token_slug || '',
+    missedAction: row.missed_action,
+    potentialGain: row.potential_gain,
+    timestamp: row.timestamp,
+    insight: row.insight,
+    sourceSurface: row.source_surface,
+    sourceAction: row.source_action,
+    patternBucket: row.pattern_bucket,
+    nextMove: row.next_move ?? undefined,
+    confidence: row.confidence ?? undefined,
+  };
+}
+
 function mapRaid(row: DbRaidCampaign): RaidCampaign {
   return {
     id: row.id,
@@ -489,28 +932,41 @@ function mapRaid(row: DbRaidCampaign): RaidCampaign {
   };
 }
 
+function mapRaidGeneration(row: DbRaidGeneration): GeneratedRaidContent {
+  return {
+    platform: row.platform,
+    missionBrief: row.mission_brief,
+    variants: row.variants ?? [],
+    replyLines: row.reply_lines ?? [],
+    quoteReplies: row.quote_replies ?? [],
+    raidAngles: row.raid_angles ?? [],
+    doNotSay: row.do_not_say ?? [],
+    callToAction: row.call_to_action,
+  };
+}
+
 function mapLaunchIdentity(row: DbLaunchIdentity): LaunchIdentity {
   return {
     projectName: row.project_name,
-    projectSummary: row.launch_copy?.[0] ?? `${row.project_name} is a Four.meme launch concept built for ${row.target_audience.toLowerCase()} with a ${row.vibe.toLowerCase()} posture.`,
-    heroLine: row.slogans?.[0] ?? `${row.project_name}. Built for attention.`,
+    projectSummary: row.project_summary ?? row.launch_copy?.[0] ?? `${row.project_name} is a Four.meme launch concept built for ${row.target_audience.toLowerCase()} with a ${row.vibe.toLowerCase()} posture.`,
+    heroLine: row.hero_line ?? row.slogans?.[0] ?? `${row.project_name}. Built for attention.`,
     memeDNA: row.meme_dna,
     nameOptions: row.name_options,
     tickerOptions: row.ticker_options,
     lore: row.lore,
     slogans: row.slogans,
-    communityHooks: row.slogans?.slice(0, 3) ?? [],
-    ritualIdeas: [
+    communityHooks: row.community_hooks ?? row.slogans?.slice(0, 3) ?? [],
+    ritualIdeas: row.ritual_ideas ?? [
       `Reply with ${row.ticker_options?.[0] ?? '$MEME'} on every milestone update.`,
       'Post one meme receipt daily to keep the cult feed alive.',
       'Celebrate every leaderboard climb with a shared call-and-response line.',
     ],
-    enemyFraming: [
+    enemyFraming: row.enemy_framing ?? [
       `Not another dead launch page. ${row.project_name} is built to feel alive.`,
       'Against empty copycat memes with no identity backbone.',
     ],
     launchCopy: row.launch_copy,
-    launchChecklist: [
+    launchChecklist: row.launch_checklist ?? [
       'Lock the hero line and ticker before posting.',
       'Publish the first 3 launch posts within the same attention window.',
       'Give the community one ritual and one rivalry angle on day one.',
@@ -629,6 +1085,26 @@ function getStoredQuestSubmissions() {
 
 function writeQuestSubmissions(submissions: LocalQuestSubmissionRecord[]) {
   writeStorage(STORAGE_KEYS.questSubmissions, submissions);
+}
+
+function hasAuthenticatedActor() {
+  return Boolean(getCurrentActor().isAuthenticated && currentUserId() && currentUserId() !== env.currentUser);
+}
+
+async function getQuestJoinsSource() {
+  if (hasSupabaseBackend) {
+    const rows = await selectRows<DbQuestParticipant[]>('quest_participants', { orderBy: { column: 'joined_at', ascending: false } }, []);
+    return rows.map(mapQuestJoin);
+  }
+  return getStoredQuestJoins();
+}
+
+async function getQuestSubmissionsSource() {
+  if (hasSupabaseBackend) {
+    const rows = await selectRows<DbQuestSubmission[]>('quest_submissions', { orderBy: { column: 'created_at', ascending: false } }, []);
+    return rows.map(mapQuestSubmissionRow);
+  }
+  return getStoredQuestSubmissions();
 }
 
 function getQuestDifficulty(reward: number): Quest['difficulty'] {
@@ -791,9 +1267,9 @@ function buildQuestProgress(quest: Quest, joined: boolean, submission?: LocalQue
 
 function enrichQuest(baseQuest: Quest, tokens: Token[], joins: LocalQuestJoin[], submissions: LocalQuestSubmissionRecord[]): Quest {
   const token = baseQuest.tokenSlug ? tokens.find((item) => item.slug === baseQuest.tokenSlug) : undefined;
-  const myJoin = joins.some((join) => join.questId === baseQuest.id && join.username === env.currentUser);
+  const myJoin = joins.some((join) => join.questId === baseQuest.id && join.username === currentUsername());
   const mySubmission = submissions
-    .filter((submission) => submission.questId === baseQuest.id && submission.username === env.currentUser)
+    .filter((submission) => submission.questId === baseQuest.id && submission.username === currentUsername())
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
 
   const completed = baseQuest.completed || mySubmission?.status === 'accepted';
@@ -826,26 +1302,170 @@ function enrichQuest(baseQuest: Quest, tokens: Token[], joins: LocalQuestJoin[],
   };
 }
 
+
+function slugifyQuestValue(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 64) || `quest-${Date.now().toString(36)}`;
+}
+
+function buildOwnerQuestSuggestions(token: Token, preferredCategory?: Quest['category']): QuestSuggestionPack {
+  const categories: Quest['category'][] = preferredCategory ? [preferredCategory] : ['posting', 'prediction', 'meme', 'rivalry'];
+  const chosen = categories.length === 1 ? categories : ['posting', 'prediction', 'meme', 'rivalry'];
+  const volumeLine = token.volume24h > 0 ? `$${Math.round(token.volume24h).toLocaleString()} 24h volume` : 'live attention starting to form';
+  const holderLine = token.holders > 0 ? `${token.holders.toLocaleString()} holders` : 'holder expansion still early';
+  const rivalSlug = token.sourceRankLabel === 'HOT' ? 'the usual weak copycat launches' : 'the louder timeline tourists';
+  const suggestionByCategory: Record<Quest['category'], Quest> = {
+    posting: {
+      id: `owner-suggest-${token.slug}-posting`,
+      title: `${token.name} narrative push`,
+      description: `Publish one strong post that makes ${token.name} easier to repeat across the timeline.`,
+      category: 'posting',
+      reward: 220,
+      completed: false,
+      tokenSlug: token.slug,
+      tokenName: token.name,
+      difficulty: 'easy',
+      proofType: 'link',
+      missionBrief: `${token.name} already has ${volumeLine}. Use that proof and the one-line narrative to create a post the community can reuse today.`,
+      submissionRule: `Submit one public X or thread link that clearly frames why ${token.name} matters right now.`,
+      exampleProof: `https://x.com/yourhandle/status/... with a line like “${token.name} already has ${volumeLine} and still looks early.”`,
+      createdByUserId: currentUserId(),
+      createdByUsername: currentUsername(),
+      aiSuggested: true,
+    },
+    prediction: {
+      id: `owner-suggest-${token.slug}-prediction`,
+      title: `${token.name} conviction check`,
+      description: `Ask the community to make one sharp call on whether ${token.name} can keep its live strength.`,
+      category: 'prediction',
+      reward: 260,
+      completed: false,
+      tokenSlug: token.slug,
+      tokenName: token.name,
+      difficulty: 'medium',
+      proofType: 'prediction',
+      missionBrief: `${token.name} is sitting on ${holderLine}. This quest works best if the community states one clear 24h condition instead of vague hype.`,
+      submissionRule: `Submit one yes-or-no prediction with a timeframe and one reason tied to live data.`,
+      exampleProof: `${token.name} keeps momentum for 24h if holders expand past today's baseline and volume does not break down.`,
+      createdByUserId: currentUserId(),
+      createdByUsername: currentUsername(),
+      aiSuggested: true,
+    },
+    meme: {
+      id: `owner-suggest-${token.slug}-meme`,
+      title: `${token.name} slogan and meme drop`,
+      description: `Create one meme caption or slogan the community can actually repeat for ${token.name}.`,
+      category: 'meme',
+      reward: 300,
+      completed: false,
+      tokenSlug: token.slug,
+      tokenName: token.name,
+      difficulty: 'medium',
+      proofType: 'image',
+      missionBrief: `${token.name} needs reusable language, not random posts. Use this quest to produce one image, caption, or slogan that makes the story stick.`,
+      submissionRule: `Submit one meme image link or one caption concept strong enough for the community to repost.`,
+      exampleProof: `Caption concept: “${token.name}: they debug for 6 hours, we ship in one tab.”`,
+      createdByUserId: currentUserId(),
+      createdByUsername: currentUsername(),
+      aiSuggested: true,
+    },
+    rivalry: {
+      id: `owner-suggest-${token.slug}-rivalry`,
+      title: `${token.name} story war`,
+      description: `Frame why ${token.name} deserves attention over ${rivalSlug}.`,
+      category: 'rivalry',
+      reward: 360,
+      completed: false,
+      tokenSlug: token.slug,
+      tokenName: token.name,
+      difficulty: 'hard',
+      proofType: 'link',
+      missionBrief: `This is a narrative fight, not a pump war. Use the mission to sharpen why ${token.name} has the stronger meme story, culture angle, or timing.`,
+      submissionRule: `Submit one public post or reply that contrasts ${token.name} against a clear rival without turning into spam.`,
+      exampleProof: `“${token.name} has the cleaner story. The other side only has noise. This one has repeatable culture.”`,
+      createdByUserId: currentUserId(),
+      createdByUsername: currentUsername(),
+      aiSuggested: true,
+    },
+    recovery: {
+      id: `owner-suggest-${token.slug}-recovery`,
+      title: `${token.name} recovery arc`,
+      description: `Use one mission to reset the tone around ${token.name} after a weak stretch.`,
+      category: 'recovery',
+      reward: 240,
+      completed: false,
+      tokenSlug: token.slug,
+      tokenName: token.name,
+      difficulty: 'medium',
+      proofType: 'text',
+      missionBrief: `${token.name} needs a cleaner second wind. Ask the community for one post, slogan, or angle that repositions the story without pretending the tape never weakened.`,
+      submissionRule: `Submit one recovery angle with a concrete line the community can reuse.`,
+      exampleProof: `${token.name} is not dead, it just needs a sharper reason to care than yesterday's weak shill cycle.`,
+      createdByUserId: currentUserId(),
+      createdByUsername: currentUsername(),
+      aiSuggested: true,
+    },
+  };
+  const suggestions = chosen.map((category) => suggestionByCategory[category]).filter(Boolean);
+  return {
+    tokenSlug: token.slug,
+    tokenName: token.name,
+    strategyNote: `${token.name} is live with ${volumeLine} and ${holderLine}. Sloan suggests owner-led quests that turn that attention into repeatable missions instead of generic spam.`,
+    suggestions,
+  };
+}
+
 async function getQuestBaseQuests(tokens: Token[] = []) {
   const dynamicQuests = buildDynamicQuestSet(tokens);
 
   if (hasSupabaseBackend) {
-    const rows = await selectRows<DbQuest[]>('quests', { orderBy: { column: 'reward', ascending: false } }, []);
+    const rows = await selectRows<DbQuest[]>('quests', { orderBy: { column: 'created_at', ascending: false } }, []);
     const storedQuests = sanitizeQuests(rows.map(mapQuest));
-    if (storedQuests.length > 0 || dynamicQuests.length > 0) {
-      return uniqueQuests([...dynamicQuests, ...storedQuests]);
+    if (storedQuests.length > 0) {
+      const ownerPublished = storedQuests.sort((a, b) => {
+        const ownerA = a.createdByUsername ? 1 : 0;
+        const ownerB = b.createdByUsername ? 1 : 0;
+        return ownerB - ownerA;
+      });
+      return uniqueQuests(ownerPublished);
     }
+    if (dynamicQuests.length > 0) return uniqueQuests(dynamicQuests);
   }
 
+  const localOwnerQuests = sanitizeQuests(readStorage(STORAGE_KEYS.quests, [] as Quest[]));
+  if (localOwnerQuests.length > 0) return uniqueQuests(localOwnerQuests);
   const fallbackQuests = sanitizeQuests(mockQuests);
   return dynamicQuests.length > 0 ? uniqueQuests([...dynamicQuests, ...fallbackQuests]) : fallbackQuests;
+}
+
+async function ensureQuestPersisted(quest: Quest) {
+  if (!hasSupabaseBackend || !hasAuthenticatedActor()) return;
+
+  await upsertRows<DbQuest[]>('quests', {
+    id: quest.id,
+    title: quest.title,
+    description: quest.description,
+    category: quest.category,
+    reward: quest.reward,
+    deadline: quest.deadline ?? null,
+    progress: typeof quest.progress === 'number' ? quest.progress : null,
+    completed: Boolean(quest.completed),
+    token_slug: quest.tokenSlug ?? null,
+    mission_brief: quest.missionBrief ?? null,
+    submission_rule: quest.submissionRule ?? null,
+    example_proof: quest.exampleProof ?? null,
+    proof_type: quest.proofType ?? null,
+    difficulty: quest.difficulty ?? null,
+    created_by_user_id: quest.createdByUserId ?? currentUserId() ?? null,
+    created_by_username: quest.createdByUsername ?? currentUsername() ?? null,
+    ai_suggested: quest.aiSuggested ?? false,
+    owner_note: quest.ownerNote ?? null,
+  }, { onConflict: 'id' }, []);
 }
 
 async function getEnrichedQuests() {
   const tokens = await tokenApi.getAll();
   const baseQuests = await getQuestBaseQuests(tokens || []);
-  const joins = getStoredQuestJoins();
-  const submissions = getStoredQuestSubmissions();
+  const [joins, submissions] = await Promise.all([getQuestJoinsSource(), getQuestSubmissionsSource()]);
   return baseQuests.map((quest) => enrichQuest(quest, tokens || [], joins, submissions));
 }
 
@@ -880,7 +1500,7 @@ function buildQuestLeaderboardEntries(submissions: LocalQuestSubmissionRecord[])
     .sort((a, b) => (b.xp - a.xp) || (b.completed - a.completed) || a.username.localeCompare(b.username));
 
   if (entries.length === 0) {
-    return [{ username: env.currentUser, xp: 0, completed: 0, pending: 0, streak: 0, badges: ['First mover'] }];
+    return [{ username: currentUsername(), xp: 0, completed: 0, pending: 0, streak: 0, badges: ['First mover'] }];
   }
 
   return entries;
@@ -888,13 +1508,13 @@ function buildQuestLeaderboardEntries(submissions: LocalQuestSubmissionRecord[])
 
 function buildQuestActivity(submissions: LocalQuestSubmissionRecord[], joins: LocalQuestJoin[]): QuestActivity {
   const mine = submissions
-    .filter((submission) => submission.username === env.currentUser)
+    .filter((submission) => submission.username === currentUsername())
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   const accepted = mine.filter((submission) => submission.status === 'accepted');
   const pending = mine.filter((submission) => submission.status === 'pending');
 
   return {
-    joinedCount: joins.filter((join) => join.username === env.currentUser).length,
+    joinedCount: joins.filter((join) => join.username === currentUsername()).length,
     completedCount: accepted.length,
     pendingCount: pending.length,
     totalXp: accepted.reduce((sum, submission) => sum + submission.xpAwarded, 0),
@@ -1111,6 +1731,37 @@ function enrichPredictions(predictions: Prediction[], tokens: Token[]) {
     .map((prediction) => resolvePredictionStatus(prediction, tokens))
     .map((prediction) => mergePredictionMeta(prediction))
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
+
+async function syncResolvedPredictionsToBackend(previous: Prediction[], next: Prediction[]) {
+  if (!hasSupabaseBackend || !hasAuthenticatedActor()) return;
+
+  const previousById = new Map(previous.map((prediction) => [prediction.id, prediction]));
+  const changed = next.filter((prediction) => {
+    const earlier = previousById.get(prediction.id);
+    return Boolean(
+      earlier &&
+      earlier.userId === currentUserId() &&
+      earlier.status === 'pending' &&
+      prediction.status !== 'pending'
+    );
+  });
+
+  await Promise.all(changed.map(async (prediction) => {
+    await updateRows<DbPrediction>('predictions', { id: prediction.id, user_id: currentUserId() }, {
+      status: prediction.status,
+      resolution_note: prediction.resolutionNote ?? null,
+      score_awarded: prediction.scoreAwarded ?? null,
+    }).catch(() => null);
+    await recordXpEvent({
+      sourceType: 'prediction_resolution',
+      sourceId: prediction.id,
+      action: prediction.status,
+      xpDelta: prediction.status === 'correct' ? Math.max(18, Math.round((prediction.scoreAwarded || 0) * 0.4)) : 0,
+      detail: prediction.resolutionNote || `Resolved ${prediction.tokenName}.`,
+      metadata: { token_slug: prediction.tokenSlug, score_awarded: prediction.scoreAwarded ?? null },
+    });
+  }));
 }
 
 function buildProphetBoard(predictions: Prediction[]) {
@@ -1994,42 +2645,125 @@ export const questApi = {
     return quests.filter((quest) => quest.category === category);
   },
   getLeaderboard: async () => {
-    return buildQuestLeaderboardEntries(getStoredQuestSubmissions());
+    const submissions = await getQuestSubmissionsSource();
+    return buildQuestLeaderboardEntries(submissions);
   },
   getMyActivity: async () => {
-    return buildQuestActivity(getStoredQuestSubmissions(), getStoredQuestJoins());
+    const [submissions, joins] = await Promise.all([getQuestSubmissionsSource(), getQuestJoinsSource()]);
+    return buildQuestActivity(submissions, joins);
   },
   getLiveFeed: async () => {
-    const quests = await getEnrichedQuests();
-    return buildQuestLiveFeed(quests, getStoredQuestSubmissions(), getStoredQuestJoins());
+    const [quests, submissions, joins] = await Promise.all([getEnrichedQuests(), getQuestSubmissionsSource(), getQuestJoinsSource()]);
+    return buildQuestLiveFeed(quests, submissions, joins);
+  },
+  getForgeSuggestions: async ({ tokenSlug, category }: { tokenSlug?: string; category?: Quest['category'] } = {}) => {
+    const tokens = await tokenApi.getAll();
+    const token = tokenSlug ? tokens.find((item) => item.slug === tokenSlug) : tokens[0];
+    if (!token) throw new Error('No live token available for quest suggestions');
+    return buildOwnerQuestSuggestions(token, category);
+  },
+  publishQuest: async (input: QuestForgeInput) => {
+    const tokens = await tokenApi.getAll();
+    const token = tokens.find((item) => item.slug === input.tokenSlug);
+    const quest: Quest = {
+      id: `owner-${slugifyQuestValue(input.tokenSlug)}-${slugifyQuestValue(input.title)}-${Date.now().toString(36)}`,
+      title: input.title.trim(),
+      description: input.description.trim(),
+      category: input.category,
+      reward: input.reward,
+      deadline: input.deadline || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      progress: 0,
+      completed: false,
+      tokenSlug: input.tokenSlug,
+      tokenName: token?.name,
+      difficulty: input.difficulty,
+      proofType: input.proofType,
+      missionBrief: input.missionBrief.trim(),
+      submissionRule: input.submissionRule.trim(),
+      exampleProof: input.exampleProof.trim(),
+      createdByUserId: currentUserId(),
+      createdByUsername: currentUsername(),
+      aiSuggested: Boolean(input.aiSuggested),
+      ownerNote: input.ownerNote?.trim() || undefined,
+    };
+
+    if (hasSupabaseBackend && hasAuthenticatedActor()) {
+      await ensureQuestPersisted(quest);
+      return quest;
+    }
+
+    const existing = sanitizeQuests(readStorage(STORAGE_KEYS.quests, [] as Quest[]));
+    writeStorage(STORAGE_KEYS.quests, [quest, ...existing.filter((item) => item.id !== quest.id)]);
+    return quest;
   },
   joinQuest: async ({ questId }: { questId: string }) => {
-    const joins = getStoredQuestJoins();
-    const existing = joins.find((join) => join.questId === questId && join.username === env.currentUser);
-    if (!existing) {
-      joins.unshift({ questId, username: env.currentUser, joinedAt: new Date().toISOString() });
-      writeQuestJoins(joins);
-    }
-
-    const quests = await getEnrichedQuests();
-    return quests.find((quest) => quest.id === questId) || null;
-  },
-  submitProof: async ({ questId, proofType, proofValue, note }: { questId: string; proofType?: QuestSubmission['proofType']; proofValue: string; note?: string }) => {
-    const joins = getStoredQuestJoins();
-    if (!joins.find((join) => join.questId === questId && join.username === env.currentUser)) {
-      joins.unshift({ questId, username: env.currentUser, joinedAt: new Date().toISOString() });
-      writeQuestJoins(joins);
-    }
-
+    const joinedAt = new Date().toISOString();
     const quests = await getEnrichedQuests();
     const quest = quests.find((item) => item.id === questId);
     if (!quest) throw new Error('Quest not found');
+
+    if (hasSupabaseBackend && hasAuthenticatedActor()) {
+      await ensureQuestPersisted(quest);
+      await upsertRows<DbQuestParticipant[]>('quest_participants', {
+        quest_id: questId,
+        user_id: currentUserId(),
+        username: currentUsername(),
+        joined_at: joinedAt,
+      }, { onConflict: 'quest_id,user_id' }, []);
+      await recordXpEvent({
+        sourceType: 'quest_join',
+        sourceId: questId,
+        action: 'joined',
+        xpDelta: 5,
+        detail: `Joined ${quest.title}.`,
+        metadata: { quest_id: questId, token_slug: quest.tokenSlug || null },
+      });
+    } else {
+      const joins = getStoredQuestJoins();
+      const existing = joins.find((join) => join.questId === questId && join.username === currentUsername());
+      if (!existing) {
+        joins.unshift({ questId, username: currentUsername(), joinedAt });
+        writeQuestJoins(joins);
+      }
+    }
+
+    return quest;
+  },
+  submitProof: async ({ questId, proofType, proofValue, note }: { questId: string; proofType?: QuestSubmission['proofType']; proofValue: string; note?: string }) => {
+    const joinedAt = new Date().toISOString();
+    const quests = await getEnrichedQuests();
+    const quest = quests.find((item) => item.id === questId);
+    if (!quest) throw new Error('Quest not found');
+
+    if (hasSupabaseBackend && hasAuthenticatedActor()) {
+      await ensureQuestPersisted(quest);
+      await upsertRows<DbQuestParticipant[]>('quest_participants', {
+        quest_id: questId,
+        user_id: currentUserId(),
+        username: currentUsername(),
+        joined_at: joinedAt,
+      }, { onConflict: 'quest_id,user_id' }, []);
+      await recordXpEvent({
+        sourceType: 'quest_join',
+        sourceId: questId,
+        action: 'joined',
+        xpDelta: 5,
+        detail: `Joined ${quest.title}.`,
+        metadata: { quest_id: questId, token_slug: quest.tokenSlug || null },
+      });
+    } else {
+      const joins = getStoredQuestJoins();
+      if (!joins.find((join) => join.questId === questId && join.username === currentUsername())) {
+        joins.unshift({ questId, username: currentUsername(), joinedAt });
+        writeQuestJoins(joins);
+      }
+    }
 
     const result = evaluateQuestSubmission(quest, proofValue, note);
     const record: LocalQuestSubmissionRecord = {
       id: createQuestSubmissionId(),
       questId,
-      username: env.currentUser,
+      username: currentUsername(),
       proofType: proofType || quest.proofType || getQuestProofType(quest.category),
       proofValue,
       note: note?.trim() || undefined,
@@ -2038,6 +2772,31 @@ export const questApi = {
       reviewSummary: result.reviewSummary,
       createdAt: new Date().toISOString(),
     };
+
+    if (hasSupabaseBackend && hasAuthenticatedActor()) {
+      const inserted = await insertRow<DbQuestSubmission>('quest_submissions', {
+        id: record.id,
+        quest_id: record.questId,
+        user_id: currentUserId(),
+        username: record.username,
+        proof_type: record.proofType,
+        proof_value: record.proofValue,
+        note: record.note ?? null,
+        status: record.status,
+        xp_awarded: record.xpAwarded,
+        review_summary: record.reviewSummary ?? null,
+        created_at: record.createdAt,
+      });
+      await recordXpEvent({
+        sourceType: 'quest_submission',
+        sourceId: record.id,
+        action: record.status,
+        xpDelta: record.status === 'accepted' ? record.xpAwarded : record.status === 'pending' ? Math.max(4, Math.round(record.xpAwarded * 0.25)) : 0,
+        detail: record.reviewSummary || `Submitted proof for ${quest.title}.`,
+        metadata: { quest_id: questId, status: record.status, token_slug: quest.tokenSlug || null },
+      });
+      return mapQuestSubmissionRow(inserted);
+    }
 
     const submissions = getStoredQuestSubmissions();
     submissions.unshift(record);
@@ -2053,7 +2812,9 @@ export const predictionApi = {
     if (hasSupabaseBackend) {
       const rows = await selectRows<DbPrediction[]>('predictions', { orderBy: { column: 'timestamp', ascending: false } }, []);
       const live = sanitizePredictions(rows.map(mapPrediction));
-      return enrichPredictions(live.length > 0 ? live : seeded, tokens || []);
+      const enriched = enrichPredictions(live.length > 0 ? live : seeded, tokens || []);
+      await syncResolvedPredictionsToBackend(live, enriched);
+      return enriched;
     }
     const localPool = getPredictionPool();
     return getJson<Prediction[]>('/api/predictions', enrichPredictions(localPool.length > 0 ? localPool : seeded, tokens || []));
@@ -2081,11 +2842,11 @@ export const predictionApi = {
       binaryAnswer: (payload as any).binaryAnswer,
     };
 
-    if (hasSupabaseBackend) {
+    if (hasSupabaseBackend && hasAuthenticatedActor()) {
       const inserted = await insertRow<DbPrediction>('predictions', {
         id,
-        user_id: env.currentUser,
-        username: env.currentUser,
+        user_id: currentUserId(),
+        username: currentUsername(),
         token_slug: payload.tokenSlug,
         token_name: token?.name || payload.tokenSlug,
         prediction: payload.prediction,
@@ -2095,9 +2856,28 @@ export const predictionApi = {
         timestamp,
         likes: 0,
         status: 'pending',
+        call_type: payload.callType ?? null,
+        confidence: payload.confidence ?? null,
+        compare_token_slug: payload.compareTokenSlug ?? null,
+        compare_token_name: payload.compareTokenName ?? null,
+        expires_at: meta.expiresAt ?? null,
+        baseline_price: meta.baselinePrice ?? null,
+        baseline_volume_24h: meta.baselineVolume24h ?? null,
+        baseline_holders: meta.baselineHolders ?? null,
+        resolution_note: null,
+        score_awarded: null,
+        question: meta.question ?? null,
+        binary_answer: meta.binaryAnswer ?? null,
       });
-      persistPredictionMeta(meta);
-      return mergePredictionMeta(mapPrediction(inserted));
+      await recordXpEvent({
+        sourceType: 'prediction',
+        sourceId: id,
+        action: 'created',
+        xpDelta: 12,
+        detail: meta.question || `Opened a ${payload.timeframe} call on ${token?.name || payload.tokenSlug}.`,
+        metadata: { token_slug: payload.tokenSlug, prediction: payload.prediction, timeframe: payload.timeframe },
+      });
+      return mapPrediction(inserted);
     }
 
     if (hasApiBaseBackend) {
@@ -2114,8 +2894,8 @@ export const predictionApi = {
 
     const prediction: Prediction = {
       id,
-      userId: env.currentUser,
-      username: env.currentUser,
+      userId: currentUserId(),
+      username: currentUsername(),
       tokenSlug: payload.tokenSlug,
       tokenName: token?.name || payload.tokenSlug,
       prediction: payload.prediction,
@@ -2162,10 +2942,418 @@ export const prophetApi = {
   },
 };
 
+
+function toTitleCase(value: string) {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function toBadgeKey(label: string) {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function derivePassportArchetype({
+  predictions,
+  acceptedQuests,
+  forgeCount,
+  raidCount,
+}: {
+  predictions: number;
+  acceptedQuests: number;
+  forgeCount: number;
+  raidCount: number;
+}) {
+  const activeSurfaces = [predictions > 0, acceptedQuests > 0, forgeCount > 0, raidCount > 0].filter(Boolean).length;
+  if (activeSurfaces >= 3) return 'Cross-surface operator';
+  if (raidCount >= Math.max(predictions, acceptedQuests, forgeCount) && raidCount > 0) return 'Raid captain';
+  if (forgeCount >= Math.max(predictions, acceptedQuests, raidCount) && forgeCount > 0) return 'Launch architect';
+  if (predictions >= Math.max(acceptedQuests, forgeCount, raidCount) && predictions > 0) return 'Signal strategist';
+  if (acceptedQuests > 0) return 'Quest operator';
+  return 'Early explorer';
+}
+
+function deriveFavoriteCategoriesFromActivity(args: {
+  joins: LocalQuestJoin[];
+  submissions: LocalQuestSubmissionRecord[];
+  questsById: Map<string, Quest>;
+  predictionCount: number;
+  forgeCount: number;
+  raidCount: number;
+}) {
+  const categoryLabels: Record<Quest['category'], string> = {
+    posting: 'Posting quests',
+    prediction: 'Prediction quests',
+    meme: 'Meme missions',
+    rivalry: 'Rivalry plays',
+    recovery: 'Recovery plans',
+  };
+  const counts = new Map<string, number>();
+
+  const touchQuest = (questId: string, weight = 1) => {
+    const quest = args.questsById.get(questId);
+    if (!quest?.category) return;
+    const label = categoryLabels[quest.category];
+    counts.set(label, (counts.get(label) || 0) + weight);
+  };
+
+  args.joins.forEach((join) => touchQuest(join.questId, 1));
+  args.submissions.forEach((submission) => touchQuest(submission.questId, submission.status === 'accepted' ? 3 : 2));
+
+  if (args.predictionCount > 0) counts.set('Signal calls', (counts.get('Signal calls') || 0) + args.predictionCount);
+  if (args.forgeCount > 0) counts.set('Launch design', (counts.get('Launch design') || 0) + args.forgeCount * 2);
+  if (args.raidCount > 0) counts.set('Raid execution', (counts.get('Raid execution') || 0) + args.raidCount * 2);
+
+  const ranked = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([label]) => label)
+    .slice(0, 4);
+
+  return ranked.length > 0 ? ranked : ['Live token research'];
+}
+
+function derivePassportBadges(args: {
+  totalXp: number;
+  joinedQuestCount: number;
+  acceptedQuestCount: number;
+  pendingQuestCount: number;
+  predictionCount: number;
+  correctPredictions: number;
+  predictionAccuracy: number;
+  forgeCount: number;
+  raidCount: number;
+}) {
+  const badges: string[] = [];
+
+  if (args.totalXp > 0) badges.push('First move');
+  if (args.joinedQuestCount >= 1) badges.push('Quest scout');
+  if (args.acceptedQuestCount >= 1) badges.push('Quest finisher');
+  if (args.acceptedQuestCount >= 3) badges.push('Quest grinder');
+  if (args.pendingQuestCount >= 2) badges.push('Mission active');
+  if (args.predictionCount >= 1) badges.push('Prophet starter');
+  if (args.correctPredictions >= 1) badges.push('Correct call');
+  if (args.correctPredictions >= 3) badges.push('Signal hitter');
+  if (args.predictionCount >= 4 && args.predictionAccuracy >= 70) badges.push('Accuracy anchor');
+  if (args.forgeCount >= 1) badges.push('Lore forger');
+  if (args.forgeCount >= 3) badges.push('Launch architect');
+  if (args.raidCount >= 1) badges.push('Raid operator');
+  if (args.raidCount >= 3) badges.push('Reply commander');
+  if ([args.joinedQuestCount > 0, args.predictionCount > 0, args.forgeCount > 0, args.raidCount > 0].filter(Boolean).length >= 3) {
+    badges.push('Cross-surface operator');
+  }
+  if (args.totalXp >= 250) badges.push('XP stacker');
+  if (args.totalXp >= 600) badges.push('Sloan heavy');
+
+  return uniqueStrings(badges, 10);
+}
+
+function buildPassportActivityItems(args: {
+  username: string;
+  questsById: Map<string, Quest>;
+  joins: LocalQuestJoin[];
+  submissions: LocalQuestSubmissionRecord[];
+  predictions: Prediction[];
+  forgeRows: DbLaunchIdentity[];
+  raidRows: DbRaidGeneration[];
+}) {
+  const items: PassportActivityItem[] = [];
+
+  for (const join of args.joins) {
+    const quest = args.questsById.get(join.questId);
+    items.push({
+      id: `quest-join-${join.questId}-${join.joinedAt}`,
+      label: quest?.title || 'Joined a quest',
+      detail: quest?.tokenSlug ? `Entered a live mission for ${quest.tokenSlug}.` : 'Entered a live Sloan quest.',
+      timestamp: join.joinedAt,
+      xpDelta: 5,
+      sourceType: 'quest',
+      tone: 'neutral',
+    });
+  }
+
+  for (const submission of args.submissions) {
+    const quest = args.questsById.get(submission.questId);
+    items.push({
+      id: `quest-submission-${submission.id}`,
+      label: quest?.title || 'Submitted quest proof',
+      detail: submission.reviewSummary || (submission.status === 'accepted'
+        ? 'Proof accepted.'
+        : submission.status === 'pending'
+          ? 'Proof is still under review.'
+          : 'Proof did not meet the mission rule yet.'),
+      timestamp: submission.createdAt,
+      xpDelta: submission.status === 'accepted' ? submission.xpAwarded : submission.status === 'pending' ? Math.max(4, Math.round(submission.xpAwarded * 0.25)) : 0,
+      sourceType: 'quest',
+      tone: submission.status === 'accepted' ? 'positive' : submission.status === 'pending' ? 'neutral' : 'warning',
+    });
+  }
+
+  for (const prediction of args.predictions) {
+    const yesNo = prediction.binaryAnswer ? prediction.binaryAnswer.toUpperCase() : prediction.prediction.toUpperCase();
+    items.push({
+      id: `prediction-${prediction.id}`,
+      label: `${prediction.tokenName} • ${yesNo}`,
+      detail: prediction.status === 'pending'
+        ? prediction.question || prediction.reasoning
+        : prediction.resolutionNote || prediction.reasoning,
+      timestamp: prediction.timestamp,
+      xpDelta: prediction.status === 'correct' ? 30 : 12,
+      sourceType: 'prediction',
+      tone: prediction.status === 'correct' ? 'positive' : prediction.status === 'incorrect' ? 'warning' : 'neutral',
+    });
+  }
+
+  for (const row of args.forgeRows) {
+    items.push({
+      id: `forge-${row.id}`,
+      label: row.project_name,
+      detail: row.hero_line || row.project_summary || `Built a launch identity around ${row.concept}.`,
+      timestamp: row.created_at,
+      xpDelta: 40,
+      sourceType: 'forge',
+      tone: 'positive',
+    });
+  }
+
+  for (const row of args.raidRows) {
+    items.push({
+      id: `raid-${row.id}`,
+      label: `${row.token_name} • ${toTitleCase(row.platform)}`,
+      detail: row.mission_brief,
+      timestamp: row.created_at,
+      xpDelta: 30,
+      sourceType: 'raid',
+      tone: 'positive',
+    });
+  }
+
+  return items
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 8);
+}
+
+async function recordXpEvent(input: {
+  sourceType: 'quest_submission' | 'quest_join' | 'prediction' | 'prediction_resolution' | 'forge_generation' | 'raid_generation';
+  sourceId: string;
+  action: string;
+  xpDelta: number;
+  detail: string;
+  metadata?: Record<string, unknown>;
+}) {
+  if (!hasSupabaseBackend || !hasAuthenticatedActor()) return;
+
+  try {
+    await upsertRows<DbXpEvent>('xp_events', {
+      id: `xp-${input.sourceType}-${input.action}-${input.sourceId}`,
+      user_id: currentUserId(),
+      username: currentUsername(),
+      source_type: input.sourceType,
+      source_id: input.sourceId,
+      action: input.action,
+      xp_delta: input.xpDelta,
+      detail: input.detail,
+      metadata: input.metadata || {},
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'source_type,source_id,action' }, {
+      id: `xp-${input.sourceType}-${input.action}-${input.sourceId}`,
+      user_id: currentUserId() || '',
+      username: currentUsername(),
+      source_type: input.sourceType,
+      source_id: input.sourceId,
+      action: input.action,
+      xp_delta: input.xpDelta,
+      detail: input.detail,
+      metadata: input.metadata || {},
+      created_at: new Date().toISOString(),
+    });
+  } catch {
+    // Passport history should not block the source action.
+  }
+}
+
+async function syncPassportBadges(args: { userId: string; username: string; badges: string[] }) {
+  if (!hasSupabaseBackend || !hasAuthenticatedActor() || !args.userId || currentUserId() !== args.userId || args.badges.length === 0) return;
+
+  try {
+    await upsertRows<DbPassportBadge[]>(
+      'passport_badges',
+      args.badges.map((badge) => ({
+        user_id: args.userId,
+        username: args.username,
+        badge_key: toBadgeKey(badge),
+        badge_label: badge,
+        context: { synced_at: new Date().toISOString() },
+        created_at: new Date().toISOString(),
+      })),
+      { onConflict: 'user_id,badge_key' },
+      [],
+    );
+  } catch {
+    // Badge sync should stay best-effort.
+  }
+}
+
+async function getForgeRowsForPassport(username: string) {
+  if (!hasSupabaseBackend) return [] as DbLaunchIdentity[];
+  try {
+    if (hasAuthenticatedActor() && username === currentUsername()) {
+      return await selectRows<DbLaunchIdentity[]>('launch_identity_generations', {
+        filters: currentActorFilters('created_by', 'created_by_user_id'),
+        orderBy: { column: 'created_at', ascending: false },
+        limit: 12,
+      }, []);
+    }
+
+    return await selectRows<DbLaunchIdentity[]>('launch_identity_generations', {
+      filters: { created_by: username },
+      orderBy: { column: 'created_at', ascending: false },
+      limit: 12,
+    }, []);
+  } catch {
+    return [] as DbLaunchIdentity[];
+  }
+}
+
+async function getRaidRowsForPassport(username: string) {
+  if (!hasSupabaseBackend) return [] as DbRaidGeneration[];
+  try {
+    if (hasAuthenticatedActor() && username === currentUsername()) {
+      return await getRaidGenerationsForCurrentActor(12);
+    }
+
+    return await selectRows<DbRaidGeneration[]>('raid_generations', {
+      filters: { created_by_username: username },
+      orderBy: { column: 'created_at', ascending: false },
+      limit: 12,
+    }, []);
+  } catch {
+    return [] as DbRaidGeneration[];
+  }
+}
+
+async function buildPassportProfile(username: string): Promise<UserProfile | undefined> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const [authProfileRow, legacyProfileRow, allTokens, allPredictions, joins, submissions, forgeRows, raidRows, quests] = await Promise.all([
+    hasSupabaseBackend
+      ? selectRows<DbAuthProfile | null>('profiles', { filters: { username: normalizedUsername }, single: true }, null).catch(() => null)
+      : Promise.resolve(null),
+    hasSupabaseBackend
+      ? selectRows<DbUserProfile | null>('user_profiles', { filters: { username: normalizedUsername }, single: true }, null).catch(() => null)
+      : Promise.resolve(null),
+    tokenApi.getAll().catch(() => [] as Token[]),
+    predictionApi.getAll().catch(() => [] as Prediction[]),
+    getQuestJoinsSource().catch(() => [] as LocalQuestJoin[]),
+    getQuestSubmissionsSource().catch(() => [] as LocalQuestSubmissionRecord[]),
+    getForgeRowsForPassport(normalizedUsername),
+    getRaidRowsForPassport(normalizedUsername),
+    getQuestBaseQuests().catch(() => [] as Quest[]),
+  ]);
+
+  if (!authProfileRow && !legacyProfileRow && normalizedUsername !== currentUsername()) {
+    return undefined;
+  }
+
+  const questsById = new Map((quests || []).map((quest) => [quest.id, quest]));
+  const userPredictions = sanitizePredictions(allPredictions || []).filter((prediction) => prediction.username === normalizedUsername);
+  const userJoins = (joins || []).filter((join) => join.username === normalizedUsername);
+  const userSubmissions = (submissions || []).filter((submission) => submission.username === normalizedUsername);
+  const acceptedSubmissions = userSubmissions.filter((submission) => submission.status === 'accepted');
+  const pendingSubmissions = userSubmissions.filter((submission) => submission.status === 'pending');
+  const correctPredictions = userPredictions.filter((prediction) => prediction.status === 'correct');
+  const predictionCount = userPredictions.length;
+  const predictionAccuracy = predictionCount > 0 ? Math.round((correctPredictions.length / predictionCount) * 100) : 0;
+  const predictionScore = userPredictions.reduce((sum, prediction) => sum + (prediction.scoreAwarded || 0), 0);
+
+  const questXp = acceptedSubmissions.reduce((sum, submission) => sum + submission.xpAwarded, 0);
+  const pendingQuestXp = pendingSubmissions.reduce((sum, submission) => sum + Math.max(4, Math.round(submission.xpAwarded * 0.25)), 0);
+  const predictionXp = (predictionCount * 12) + (correctPredictions.length * 18);
+  const forgeXp = forgeRows.length * 40;
+  const raidXp = raidRows.length * 30;
+  const totalXp = questXp + pendingQuestXp + predictionXp + forgeXp + raidXp;
+
+  const prophetBoard = buildProphetBoard(sanitizePredictions(allPredictions || []));
+  const prophetRank = prophetBoard.find((entry) => entry.username === normalizedUsername)?.rank || legacyProfileRow?.prophet_rank || 0;
+  const raiderImpact = Math.max(
+    legacyProfileRow?.raider_impact || 0,
+    (raidRows.length * 120) + (forgeRows.length * 90) + (acceptedSubmissions.length * 35) + (predictionCount * 15),
+  );
+  const favoriteCategories = deriveFavoriteCategoriesFromActivity({
+    joins: userJoins,
+    submissions: userSubmissions,
+    questsById,
+    predictionCount,
+    forgeCount: forgeRows.length,
+    raidCount: raidRows.length,
+  });
+  const archetype = derivePassportArchetype({
+    predictions: predictionCount,
+    acceptedQuests: acceptedSubmissions.length,
+    forgeCount: forgeRows.length,
+    raidCount: raidRows.length,
+  });
+  const badges = derivePassportBadges({
+    totalXp,
+    joinedQuestCount: userJoins.length,
+    acceptedQuestCount: acceptedSubmissions.length,
+    pendingQuestCount: pendingSubmissions.length,
+    predictionCount,
+    correctPredictions: correctPredictions.length,
+    predictionAccuracy,
+    forgeCount: forgeRows.length,
+    raidCount: raidRows.length,
+  });
+  const recentActivity = buildPassportActivityItems({
+    username: normalizedUsername,
+    questsById,
+    joins: userJoins,
+    submissions: userSubmissions,
+    predictions: userPredictions,
+    forgeRows,
+    raidRows,
+  });
+
+  const joinedDate = authProfileRow?.created_at || legacyProfileRow?.joined_date || new Date().toISOString();
+  const profile: UserProfile = {
+    username: normalizedUsername,
+    displayName: authProfileRow?.display_name || legacyProfileRow?.display_name || normalizedUsername,
+    avatar: authProfileRow?.avatar_url || legacyProfileRow?.avatar || undefined,
+    archetype,
+    prophetRank,
+    raiderImpact,
+    questsCompleted: acceptedSubmissions.length,
+    favoriteCategories,
+    joinedDate,
+    badges,
+    bio: authProfileRow?.bio || undefined,
+    totalXp,
+    badgeCount: badges.length,
+    predictionCount,
+    correctPredictions: correctPredictions.length,
+    predictionAccuracy,
+    predictionScore,
+    forgeCount: forgeRows.length,
+    raidCount: raidRows.length,
+    joinedQuestCount: userJoins.length,
+    questParticipationCount: userSubmissions.length,
+    recentActivity,
+  };
+
+  if (hasAuthenticatedActor() && currentUsername() === normalizedUsername && currentUserId()) {
+    await syncPassportBadges({ userId: currentUserId() || '', username: normalizedUsername, badges });
+  }
+
+  return profile;
+}
+
+
 export const userApi = {
   getProfile: async (username: string) => {
     if (hasSupabaseBackend) {
-      const row = await selectRows<DbUserProfile | null>('user_profiles', { filters: { username }, single: true }, null);
+      const derived = await buildPassportProfile(username);
+      if (derived) return sanitizeProfiles(derived);
+      const row = await selectRows<DbUserProfile | null>('user_profiles', { filters: { username }, single: true }, null).catch(() => null);
       return sanitizeProfiles(row ? mapProfile(row) : undefined);
     }
     return getJson<UserProfile | undefined>(`/api/users/${username}`, mockUserProfiles[username]);
@@ -2204,6 +3392,35 @@ export const userApi = {
     const predictions = await predictionApi.getByUser(username).catch(() => [] as Prediction[]);
     const derived = buildDerivedCounterfactuals(tokens || [], predictions || [], username);
 
+    if (hasSupabaseBackend && hasAuthenticatedActor() && username === currentUsername()) {
+      const [joins, submissions, quests, raidRows] = await Promise.all([
+        getQuestJoinsSource().catch(() => [] as LocalQuestJoin[]),
+        getQuestSubmissionsSource().catch(() => [] as LocalQuestSubmissionRecord[]),
+        getQuestBaseQuests().catch(() => [] as Quest[]),
+        getRaidRowsForPassport(username).catch(() => [] as DbRaidGeneration[]),
+      ]);
+
+      const owned = buildMirrorEntriesFromOwnedActivity({
+        username,
+        tokens: tokens || [],
+        predictions: predictions || [],
+        joins,
+        submissions,
+        quests,
+        raidRows,
+      });
+
+      await syncMirrorEntriesForCurrentActor(owned);
+
+      const rows = await selectRows<DbMirrorEntry[]>('mirror_entries', {
+        filters: currentActorFilters('username', 'user_id'),
+        orderBy: { column: 'timestamp', ascending: false },
+        limit: 12,
+      }, []);
+      const liveRows = sanitizeCounterfactuals(rows.map(mapMirrorEntry));
+      return uniqueCounterfactualEntries([...(liveRows || []), ...derived]).slice(0, 8);
+    }
+
     if (hasSupabaseBackend) {
       const rows = await selectRows<DbCounterfactual[]>('counterfactual_entries', { orderBy: { column: 'timestamp', ascending: false } }, []);
       const liveRows = sanitizeCounterfactuals(rows.map(mapCounterfactual));
@@ -2214,6 +3431,35 @@ export const userApi = {
     return uniqueCounterfactualEntries([...(mockRows || []), ...derived]).slice(0, 8);
   },
 };
+
+async function getRaidGenerationsForCurrentActor(limit = 6) {
+  if (!hasSupabaseBackend) return [] as DbRaidGeneration[];
+
+  const userId = isAuthenticatedActor() ? currentUserId() : null;
+  const username = currentUsername();
+
+  if (userId) {
+    const byUserId = await selectRows<DbRaidGeneration[]>('raid_generations', {
+      filters: { created_by_user_id: userId },
+      orderBy: { column: 'created_at', ascending: false },
+      limit,
+    }, []);
+
+    if (byUserId.length > 0) return byUserId;
+  }
+
+  if (username) {
+    const byUsername = await selectRows<DbRaidGeneration[]>('raid_generations', {
+      filters: { created_by_username: username },
+      orderBy: { column: 'created_at', ascending: false },
+      limit,
+    }, []);
+
+    if (byUsername.length > 0) return byUsername;
+  }
+
+  return [] as DbRaidGeneration[];
+}
 
 export const raidApi = {
   getCampaigns: async () => {
@@ -2232,12 +3478,106 @@ export const raidApi = {
   },
   getContentVariants: async () => getJson('/api/raids/content-variants', mockContentVariants),
   getReplyLines: async () => getJson('/api/raids/reply-lines', mockReplyLines),
+  getLastGenerated: async () => {
+    const stored = readStorage<GeneratedRaidContent | null>(STORAGE_KEYS.raids, null);
+    if (hasSupabaseBackend) {
+      const rows = await getRaidGenerationsForCurrentActor(1);
+      if (rows.length > 0) {
+        const latest = mapRaidGeneration(rows[0]);
+        if (!stored || latest.missionBrief !== stored.missionBrief) {
+          writeStorage(STORAGE_KEYS.raids, latest);
+        }
+        return latest;
+      }
+    }
+    return stored;
+  },
+  getHistory: async () => {
+    const localHistory = readStorage<GeneratedRaidContent[]>(STORAGE_KEYS.raidsHistory, []);
+    if (hasSupabaseBackend) {
+      const rows = await getRaidGenerationsForCurrentActor(6);
+      const remote = rows.map(mapRaidGeneration);
+      if (remote.length > 0) {
+        writeStorage(STORAGE_KEYS.raidsHistory, remote);
+        return remote;
+      }
+    }
+    const stored = readStorage<GeneratedRaidContent | null>(STORAGE_KEYS.raids, null);
+    if (localHistory.length > 0) return localHistory;
+    return stored ? [stored] : [];
+  },
   generateContent: async (params: RaidGenerationInput) => {
     if (hasSupabaseBackend) {
       const fallback = { success: true, content: createRaidContent(params) };
       const result = await invokeFunction<{ success: boolean; content: GeneratedRaidContent }>('raid-generate', params, fallback);
       const repaired = repairRaidContent(params, result.content || fallback.content);
+      const timestamp = new Date().toISOString();
+      const generationId = createPredictionId();
+      const inserted = await insertRow<DbRaidGeneration>('raid_generations', {
+        id: generationId,
+        created_by_user_id: isAuthenticatedActor() ? currentUserId() : null,
+        created_by_username: currentUsername(),
+        token_slug: params.tokenSlug ?? null,
+        token_name: params.token,
+        token_ticker: params.tokenTicker ?? null,
+        platform: repaired.platform,
+        vibe: params.vibe,
+        objective: params.objective,
+        audience: params.audience ?? null,
+        contrast: params.contrast ?? null,
+        call_to_action_input: params.callToAction ?? null,
+        narrative_summary: params.narrativeSummary ?? null,
+        momentum: params.momentum ?? null,
+        volume_24h: params.volume24h ?? null,
+        holders: params.holders ?? null,
+        price_change_24h: params.priceChange24h ?? null,
+        source_rank_label: params.sourceRankLabel ?? null,
+        mission_brief: repaired.missionBrief,
+        variants: repaired.variants,
+        reply_lines: repaired.replyLines,
+        quote_replies: repaired.quoteReplies,
+        raid_angles: repaired.raidAngles,
+        do_not_say: repaired.doNotSay,
+        call_to_action: repaired.callToAction,
+        created_at: timestamp,
+      }, {
+        id: generationId,
+        created_by_user_id: isAuthenticatedActor() ? currentUserId() : null,
+        created_by_username: currentUsername(),
+        token_name: params.token,
+        platform: repaired.platform,
+        vibe: params.vibe,
+        objective: params.objective,
+        mission_brief: repaired.missionBrief,
+        variants: repaired.variants,
+        reply_lines: repaired.replyLines,
+        quote_replies: repaired.quoteReplies,
+        raid_angles: repaired.raidAngles,
+        do_not_say: repaired.doNotSay,
+        call_to_action: repaired.callToAction,
+        created_at: timestamp,
+      });
+      if (isAuthenticatedActor() && inserted?.id && !inserted?.created_by_user_id) {
+        try {
+          await updateRows<DbRaidGeneration>('raid_generations', { id: inserted.id }, {
+            created_by_user_id: currentUserId(),
+            created_by_username: currentUsername(),
+          }, inserted);
+        } catch {
+          // Keep the row usable through username fallback if the ownership repair cannot run.
+        }
+      }
+      await recordXpEvent({
+        sourceType: 'raid_generation',
+        sourceId: inserted?.id || generationId,
+        action: 'generated',
+        xpDelta: 30,
+        detail: repaired.missionBrief,
+        metadata: { token_slug: params.tokenSlug ?? null, token_name: params.token, platform: repaired.platform },
+      });
       writeStorage(STORAGE_KEYS.raids, repaired);
+      const existingHistory = readStorage<GeneratedRaidContent[]>(STORAGE_KEYS.raidsHistory, []);
+      writeStorage(STORAGE_KEYS.raidsHistory, [repaired, ...existingHistory.filter((item) => item.missionBrief !== repaired.missionBrief)].slice(0, 6));
       return { ...result, content: repaired };
     }
 
@@ -2251,11 +3591,15 @@ export const raidApi = {
       const result = await response.json();
       const repaired = repairRaidContent(params, result.content || createRaidContent(params));
       writeStorage(STORAGE_KEYS.raids, repaired);
+      const existingHistory = readStorage<GeneratedRaidContent[]>(STORAGE_KEYS.raidsHistory, []);
+      writeStorage(STORAGE_KEYS.raidsHistory, [repaired, ...existingHistory.filter((item) => item.missionBrief !== repaired.missionBrief)].slice(0, 6));
       return { ...result, content: repaired };
     }
 
     const content = createRaidContent(params);
     writeStorage(STORAGE_KEYS.raids, content);
+    const existingHistory = readStorage<GeneratedRaidContent[]>(STORAGE_KEYS.raidsHistory, []);
+    writeStorage(STORAGE_KEYS.raidsHistory, [content, ...existingHistory.filter((item) => item.missionBrief !== content.missionBrief)].slice(0, 6));
     return { success: true, content };
   },
 };
@@ -2266,7 +3610,7 @@ export const forgeApi = {
     if (stored) return stored;
     if (hasSupabaseBackend) {
       const row = await selectRows<DbLaunchIdentity | null>('launch_identity_generations', {
-        filters: { created_by: env.currentUser },
+        filters: currentActorFilters(),
         orderBy: { column: 'created_at', ascending: false },
         limit: 1,
         single: true,
@@ -2278,7 +3622,7 @@ export const forgeApi = {
   getHistory: async () => {
     if (hasSupabaseBackend) {
       const rows = await selectRows<DbLaunchIdentity[]>('launch_identity_generations', {
-        filters: { created_by: env.currentUser },
+        filters: currentActorFilters(),
         orderBy: { column: 'created_at', ascending: false },
         limit: 6,
       }, []);
@@ -2296,37 +3640,63 @@ export const forgeApi = {
       });
 
       const repairedIdentity = repairIdentityOutput(params, result.identity);
+      const timestamp = new Date().toISOString();
 
-      await insertRow<DbLaunchIdentity>('launch_identity_generations', {
-        id: createPredictionId(),
-        created_by: env.currentUser,
+      const generationId = createPredictionId();
+      const inserted = await insertRow<DbLaunchIdentity>('launch_identity_generations', {
+        id: generationId,
+        created_by_user_id: isAuthenticatedActor() ? currentUserId() : null,
+        created_by: currentUsername(),
         concept: params.concept,
         target_audience: params.targetAudience,
         vibe: params.vibe,
         project_name: repairedIdentity.projectName,
+        project_summary: repairedIdentity.projectSummary ?? null,
+        hero_line: repairedIdentity.heroLine ?? null,
         meme_dna: repairedIdentity.memeDNA,
         name_options: repairedIdentity.nameOptions,
         ticker_options: repairedIdentity.tickerOptions,
         lore: repairedIdentity.lore,
         slogans: repairedIdentity.slogans,
+        community_hooks: repairedIdentity.communityHooks ?? [],
+        ritual_ideas: repairedIdentity.ritualIdeas ?? [],
+        enemy_framing: repairedIdentity.enemyFraming ?? [],
         launch_copy: repairedIdentity.launchCopy,
+        launch_checklist: repairedIdentity.launchChecklist ?? [],
         aesthetic_direction: repairedIdentity.aestheticDirection,
-        created_at: new Date().toISOString(),
+        created_at: timestamp,
+        updated_at: timestamp,
       }, {
-        id: createPredictionId(),
-        created_by: env.currentUser,
+        id: generationId,
+        created_by: currentUsername(),
         concept: params.concept,
         target_audience: params.targetAudience,
         vibe: params.vibe,
         project_name: repairedIdentity.projectName,
+        project_summary: repairedIdentity.projectSummary ?? null,
+        hero_line: repairedIdentity.heroLine ?? null,
         meme_dna: repairedIdentity.memeDNA,
         name_options: repairedIdentity.nameOptions,
         ticker_options: repairedIdentity.tickerOptions,
         lore: repairedIdentity.lore,
         slogans: repairedIdentity.slogans,
+        community_hooks: repairedIdentity.communityHooks ?? [],
+        ritual_ideas: repairedIdentity.ritualIdeas ?? [],
+        enemy_framing: repairedIdentity.enemyFraming ?? [],
         launch_copy: repairedIdentity.launchCopy,
+        launch_checklist: repairedIdentity.launchChecklist ?? [],
         aesthetic_direction: repairedIdentity.aestheticDirection,
-        created_at: new Date().toISOString(),
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+
+      await recordXpEvent({
+        sourceType: 'forge_generation',
+        sourceId: inserted?.id || generationId,
+        action: 'generated',
+        xpDelta: 40,
+        detail: repairedIdentity.heroLine || repairedIdentity.projectSummary || `Built ${repairedIdentity.projectName}.`,
+        metadata: { project_name: repairedIdentity.projectName, concept: params.concept },
       });
 
       writeStorage(STORAGE_KEYS.forge, repairedIdentity);

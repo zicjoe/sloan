@@ -72,6 +72,15 @@ create table if not exists public.quests (
   progress integer,
   completed boolean not null default false,
   token_slug text references public.tokens(slug) on delete set null,
+  mission_brief text,
+  submission_rule text,
+  example_proof text,
+  proof_type text check (proof_type is null or proof_type in ('link','text','image','prediction')),
+  difficulty text check (difficulty is null or difficulty in ('easy','medium','hard')),
+  created_by_user_id text,
+  created_by_username text,
+  ai_suggested boolean not null default false,
+  owner_note text,
   created_at timestamptz not null default now()
 );
 

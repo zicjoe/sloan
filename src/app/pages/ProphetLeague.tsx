@@ -1,5 +1,6 @@
 import { Trophy, TrendingUp, Target, Award, Clock3, CheckCircle2, XCircle } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { SectionHeader } from '../components/SectionHeader';
 import { ProphetRow } from '../components/ProphetRow';
 import { PredictionCard } from '../components/PredictionCard';
@@ -7,11 +8,13 @@ import { StatCard } from '../components/StatCard';
 import { LoadingState } from '../components/LoadingState';
 import { useApi, useMutation } from '../hooks/useApi';
 import { predictionApi, prophetApi, tokenApi } from '../services/api';
-import { env } from '../lib/env';
+import { useAuth } from '../auth/AuthContext';
 import { formatPercent, formatUsd } from '../lib/format';
 import type { Prediction, PredictionOpportunity } from '../types';
 
 export function ProphetLeague() {
+  const { profile, isAuthenticated } = useAuth();
+  const username = profile?.username || 'current_user';
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedFeed, setSelectedFeed] = useState<'open' | 'resolved'>('open');
 
@@ -25,7 +28,7 @@ export function ProphetLeague() {
   const liveTokens = tokens || [];
 
   const myPredictions = useMemo(
-    () => (predictions || []).filter((prediction) => prediction.username === env.currentUser),
+    () => (predictions || []).filter((prediction) => prediction.username === username),
     [predictions],
   );
 
@@ -40,13 +43,14 @@ export function ProphetLeague() {
   );
 
   const recentFeed = selectedFeed === 'open' ? openPredictions : resolvedPredictions;
-  const currentProfile = (prophets || []).find((prophet) => prophet.username === env.currentUser) || prophets?.[0];
+  const currentProfile = (prophets || []).find((prophet) => prophet.username === username) || prophets?.[0];
   const resolvedMine = myPredictions.filter((prediction) => prediction.status !== 'pending');
   const correctMine = resolvedMine.filter((prediction) => prediction.status === 'correct');
   const myScore = myPredictions.reduce((sum, prediction) => sum + (prediction.scoreAwarded || 0), 0);
   const liveAccuracy = resolvedMine.length > 0 ? `${((correctMine.length / resolvedMine.length) * 100).toFixed(1)}%` : currentProfile ? `${currentProfile.accuracy.toFixed(1)}%` : '0%';
 
   async function answerOpportunity(opportunity: PredictionOpportunity, answer: 'yes' | 'no') {
+    if (!isAuthenticated) return;
     const token = liveTokens.find((item) => item.slug === opportunity.tokenSlug);
     const result = await mutate({
       tokenSlug: opportunity.tokenSlug,

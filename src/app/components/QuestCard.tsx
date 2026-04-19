@@ -76,6 +76,16 @@ export function QuestCard({ quest, onSelect, selected = false }: QuestCardProps)
             ${quest.tokenSlug.toUpperCase()}
           </span>
         )}
+        {quest.createdByUsername && (
+          <span className="px-2 py-1 rounded text-xs border bg-background-subtle text-muted-foreground border-border-subtle">
+            by @{quest.createdByUsername}
+          </span>
+        )}
+        {quest.aiSuggested && (
+          <span className="px-2 py-1 rounded text-xs border bg-primary/10 text-primary border-primary/20">
+            AI suggested
+          </span>
+        )}
       </div>
 
       {quest.missionBrief && (

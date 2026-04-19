@@ -37,6 +37,7 @@ export function RaidStudio() {
     callToAction: '',
   });
   const [generated, setGenerated] = useState<GeneratedRaidContent | null>(() => readStorage<GeneratedRaidContent | null>(STORAGE_KEY, null));
+  const [history, setHistory] = useState<GeneratedRaidContent[]>([]);
   const { data: campaigns, loading: campaignsLoading } = useApi(raidApi.getCampaigns);
   const { data: contentVariants, loading: contentLoading } = useApi(raidApi.getContentVariants);
   const { data: replyLines, loading: repliesLoading } = useApi(raidApi.getReplyLines);
@@ -62,6 +63,17 @@ export function RaidStudio() {
       setForm(prev => ({ ...prev, callToAction: getSuggestedCTA(selectedToken) }));
     }
   }, [selectedToken, form.callToAction]);
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([raidApi.getLastGenerated?.() ?? Promise.resolve(null), raidApi.getHistory?.() ?? Promise.resolve([])]).then(([saved, savedHistory]) => {
+      if (!mounted) return;
+      if (saved) setGenerated(saved);
+      if (savedHistory?.length) setHistory(savedHistory);
+    }).catch(() => undefined);
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const totalEngagement = (campaigns || []).reduce((sum, campaign) => sum + campaign.engagement, 0);
   const totalPosts = (campaigns || []).reduce((sum, campaign) => sum + campaign.postsGenerated, 0);
@@ -91,6 +103,7 @@ export function RaidStudio() {
     });
     if (result?.content) {
       setGenerated(result.content);
+      setHistory((prev) => [result.content, ...prev.filter((item) => item.missionBrief !== result.content.missionBrief)].slice(0, 6));
       writeStorage(STORAGE_KEY, result.content);
     }
   }
@@ -232,6 +245,27 @@ export function RaidStudio() {
                 ))}
                 {!generated?.quoteReplies?.length ? <p className="text-sm text-muted-foreground">Generate a raid pack to get quote reply lines.</p> : null}
               </div>
+            </div>
+          </div>
+
+          <div className="p-6 rounded-lg bg-card border border-card-border">
+            <div className="flex items-center justify-between mb-4"><div className="flex items-center gap-2"><ClipboardList className="w-5 h-5 text-primary" /><h3 className="text-foreground">Recent raid packs</h3></div><span className="text-xs text-muted-foreground">Latest 6</span></div>
+            <div className="space-y-3">
+              {history.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                  Your recent raid packs will show here after generation.
+                </div>
+              ) : history.map((item, index) => (
+                <button key={`${item.platform}-${index}-${item.missionBrief.slice(0, 18)}`} type="button" onClick={() => setGenerated(item)} className="w-full rounded-lg border border-border bg-background-subtle p-4 text-left transition hover:border-primary/40">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-foreground">{item.platform} raid pack</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.missionBrief}</p>
+                    </div>
+                    <span className="rounded-md border border-primary/20 bg-primary/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-primary">Load</span>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
 

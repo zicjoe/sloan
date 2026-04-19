@@ -66,6 +66,33 @@ export interface Quest {
   mySubmissionStatus?: 'none' | 'joined' | 'pending' | 'accepted' | 'rejected';
   status?: 'open' | 'pending_review' | 'complete';
   xpAwarded?: number;
+  createdByUserId?: string;
+  createdByUsername?: string;
+  aiSuggested?: boolean;
+  ownerNote?: string;
+}
+
+export interface QuestSuggestionPack {
+  tokenSlug: string;
+  tokenName: string;
+  suggestions: Quest[];
+  strategyNote: string;
+}
+
+export interface QuestForgeInput {
+  tokenSlug: string;
+  category: Quest['category'];
+  title: string;
+  description: string;
+  reward: number;
+  difficulty: NonNullable<Quest['difficulty']>;
+  proofType: NonNullable<Quest['proofType']>;
+  missionBrief: string;
+  submissionRule: string;
+  exampleProof: string;
+  deadline?: string;
+  ownerNote?: string;
+  aiSuggested?: boolean;
 }
 
 export interface QuestSubmission {
@@ -165,6 +192,16 @@ export interface Prophet {
   avatar?: string;
 }
 
+export interface PassportActivityItem {
+  id: string;
+  label: string;
+  detail: string;
+  timestamp: string;
+  xpDelta: number;
+  sourceType: 'quest' | 'prediction' | 'forge' | 'raid';
+  tone?: 'positive' | 'neutral' | 'warning';
+}
+
 export interface UserProfile {
   username: string;
   displayName: string;
@@ -176,6 +213,18 @@ export interface UserProfile {
   favoriteCategories: string[];
   joinedDate: string;
   badges: string[];
+  bio?: string;
+  totalXp?: number;
+  badgeCount?: number;
+  predictionCount?: number;
+  correctPredictions?: number;
+  predictionAccuracy?: number;
+  predictionScore?: number;
+  forgeCount?: number;
+  raidCount?: number;
+  joinedQuestCount?: number;
+  questParticipationCount?: number;
+  recentActivity?: PassportActivityItem[];
 }
 
 export interface CounterfactualEntry {
@@ -186,6 +235,11 @@ export interface CounterfactualEntry {
   potentialGain: number;
   timestamp: string;
   insight: string;
+  sourceSurface?: 'prediction' | 'quest' | 'raid' | 'token_watch';
+  sourceAction?: string;
+  patternBucket?: 'hesitation' | 'peak_chasing' | 'late_exit' | 'over_caution';
+  nextMove?: string;
+  confidence?: number;
 }
 
 export interface LoreEntry {

@@ -5,6 +5,8 @@ export const env = {
   supabaseUrl: (import.meta.env.VITE_SUPABASE_URL || '').trim(),
   supabaseAnonKey: (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim(),
   supabaseFunctionsBaseUrl: (import.meta.env.VITE_SUPABASE_FUNCTIONS_URL || '').trim(),
+  supabaseRedirectUrl: (import.meta.env.VITE_SUPABASE_REDIRECT_URL || '').trim(),
+  appUrl: (import.meta.env.VITE_APP_URL || window.location.origin || '').trim(),
 };
 
 export const hasApiBaseBackend = Boolean(env.apiBaseUrl) && !env.useMockApi;

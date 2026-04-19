@@ -56,11 +56,20 @@ export function QuestArena() {
 
   return (
     <div className="p-8 space-y-8">
-      <SectionHeader
-        title="Quest Arena"
-        subtitle="Open a mission as its own page, complete the loop, then tap back to return to the full queue"
-        icon={<Swords className="w-5 h-5" />}
-      />
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <SectionHeader
+          title="Quest Arena"
+          subtitle="Community missions now work best when a meme owner or operator publishes them with Sloan AI assistance. Open Quest Forge to draft and publish the next mission."
+          icon={<Swords className="w-5 h-5" />}
+        />
+        <Link
+          to="/dashboard/quests/forge"
+          className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm text-primary transition hover:bg-primary/15"
+        >
+          <Flame className="w-4 h-4" />
+          Open Quest Forge
+        </Link>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="p-4 rounded-lg bg-card border border-card-border">
@@ -102,7 +111,7 @@ export function QuestArena() {
             <div className="flex items-center justify-between gap-3 mb-4">
               <div>
                 <h3 className="text-foreground text-lg">Live Mission Queue</h3>
-                <p className="text-sm text-muted-foreground">Open any quest as its own mission page. One tap back returns you to this filtered queue.</p>
+                <p className="text-sm text-muted-foreground">Published owner quests appear first. Sloan fallback quests only appear when a token has no operator-led mission live yet.</p>
               </div>
               <span className="px-2.5 py-1 rounded-full text-xs border bg-primary/10 text-primary border-primary/20">route-based demo</span>
             </div>
@@ -120,7 +129,16 @@ export function QuestArena() {
           </div>
         </div>
       ) : (
-        <EmptyState icon={<Swords className="w-8 h-8" />} title="No live quests in this category" description="When quests are synced into Sloan, they will appear here automatically." />
+        <div className="space-y-4">
+          <EmptyState icon={<Swords className="w-8 h-8" />} title="No live quests in this category" description="Publish a mission from Quest Forge and it will appear here for the community instantly." />
+          <Link
+            to="/dashboard/quests/forge"
+            className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm text-primary transition hover:bg-primary/15"
+          >
+            <Flame className="w-4 h-4" />
+            Create the first quest
+          </Link>
+        </div>
       )}
     </div>
   );
