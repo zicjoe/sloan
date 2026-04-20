@@ -18,6 +18,22 @@ export interface Token {
   listedPancake?: boolean;
   lastSyncedAt?: string;
   sourceRankLabel?: string;
+  category?: string;
+  launchAge?: string;
+  liquidity?: number;
+  isAICreated?: boolean;
+  isXMode?: boolean;
+  isAntiSniper?: boolean;
+  isTaxToken?: boolean;
+  taxRate?: number;
+  isPancake?: boolean;
+  signalSummary?: string;
+  reasonLine?: string;
+  actionBias?: 'bullish' | 'bearish' | 'neutral';
+  freshnessScore?: number;
+  hasQuest?: boolean;
+  questCount?: number;
+  riskFlags?: string[];
 }
 
 export interface LivePulseEvent {
@@ -192,16 +208,6 @@ export interface Prophet {
   avatar?: string;
 }
 
-export interface PassportActivityItem {
-  id: string;
-  label: string;
-  detail: string;
-  timestamp: string;
-  xpDelta: number;
-  sourceType: 'quest' | 'prediction' | 'forge' | 'raid';
-  tone?: 'positive' | 'neutral' | 'warning';
-}
-
 export interface UserProfile {
   username: string;
   displayName: string;
@@ -213,18 +219,6 @@ export interface UserProfile {
   favoriteCategories: string[];
   joinedDate: string;
   badges: string[];
-  bio?: string;
-  totalXp?: number;
-  badgeCount?: number;
-  predictionCount?: number;
-  correctPredictions?: number;
-  predictionAccuracy?: number;
-  predictionScore?: number;
-  forgeCount?: number;
-  raidCount?: number;
-  joinedQuestCount?: number;
-  questParticipationCount?: number;
-  recentActivity?: PassportActivityItem[];
 }
 
 export interface CounterfactualEntry {
@@ -235,11 +229,6 @@ export interface CounterfactualEntry {
   potentialGain: number;
   timestamp: string;
   insight: string;
-  sourceSurface?: 'prediction' | 'quest' | 'raid' | 'token_watch';
-  sourceAction?: string;
-  patternBucket?: 'hesitation' | 'peak_chasing' | 'late_exit' | 'over_caution';
-  nextMove?: string;
-  confidence?: number;
 }
 
 export interface LoreEntry {

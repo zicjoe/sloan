@@ -24,3 +24,11 @@ export { PageHeader } from './PageHeader';
 // State components
 export { EmptyState } from './EmptyState';
 export { LoadingState, LoadingSkeleton } from './LoadingState';
+
+// Prophet League redesign components
+export { MakeCallComposer } from './MakeCallComposer';
+export { FocusedTokenPanel } from './FocusedTokenPanel';
+export { OpportunityCard } from './OpportunityCard';
+export { ActiveCallCard } from './ActiveCallCard';
+export { ResolvedCallCard } from './ResolvedCallCard';
+export { LeaderboardPanel } from './LeaderboardPanel';

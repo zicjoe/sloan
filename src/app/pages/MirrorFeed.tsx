@@ -9,12 +9,11 @@ import { useApi } from '../hooks/useApi';
 import { predictionApi, tokenApi, userApi } from '../services/api';
 import { useAuth } from '../auth/AuthContext';
 import { formatCount, formatPercent, formatUsd } from '../lib/format';
-import type { CounterfactualEntry, Prediction, Token, UserProfile } from '../types';
+import type { CounterfactualEntry, Prediction, Token } from '../types';
 
 type PatternBucket = 'hesitation' | 'peak_chasing' | 'late_exit' | 'over_caution';
 
 function classifyPattern(entry: CounterfactualEntry): PatternBucket {
-  if (entry.patternBucket) return entry.patternBucket;
   const text = `${entry.missedAction} ${entry.insight}`.toLowerCase();
   if (text.includes('peak') || text.includes('fomo') || text.includes('late entry')) return 'peak_chasing';
   if (text.includes('sold') || text.includes('take profit') || text.includes('held')) return 'late_exit';
@@ -48,23 +47,7 @@ function patternDescription(bucket: PatternBucket) {
   }
 }
 
-function sourceSurfaceLabel(surface?: CounterfactualEntry['sourceSurface']) {
-  switch (surface) {
-    case 'prediction':
-      return 'Prophet signal';
-    case 'quest':
-      return 'Quest behavior';
-    case 'raid':
-      return 'Raid behavior';
-    case 'token_watch':
-      return 'Live watch';
-    default:
-      return 'Mirror';
-  }
-}
-
 function getNextMove(entry: CounterfactualEntry, token?: Token) {
-  if (entry.nextMove) return entry.nextMove;
   const bucket = classifyPattern(entry);
   if (bucket === 'peak_chasing') {
     return 'Wait for a reset or a cleaner confirmation before taking the next entry.';
@@ -94,9 +77,8 @@ export function MirrorFeed() {
   const { data: counterfactuals, loading: counterfactualLoading } = useApi(() => userApi.getCounterfactuals(username), [username]);
   const { data: predictions, loading: predictionLoading } = useApi(() => predictionApi.getByUser(username), [username]);
   const { data: tokens, loading: tokenLoading } = useApi(tokenApi.getAll);
-  const { data: userProfile, loading: profileLoading } = useApi<UserProfile | undefined>(() => userApi.getProfile(username), [username]);
 
-  const loading = counterfactualLoading || predictionLoading || tokenLoading || profileLoading;
+  const loading = counterfactualLoading || predictionLoading || tokenLoading;
   const items = counterfactuals || [];
   const liveTokens = tokens || [];
   const myPredictions = predictions || [];
@@ -127,15 +109,6 @@ export function MirrorFeed() {
       .sort((a, b) => (b.volume24h + Math.max(0, b.priceChange24h) * 1200) - (a.volume24h + Math.max(0, a.priceChange24h) * 1200))
       .slice(0, 3);
   }, [liveTokens]);
-
-  const activityCoverage = [
-    { label: 'Prophet calls', value: userProfile?.predictionCount || myPredictions.length },
-    { label: 'Quest joins', value: userProfile?.joinedQuestCount || 0 },
-    { label: 'Forge outputs', value: userProfile?.forgeCount || 0 },
-    { label: 'Raid packs', value: userProfile?.raidCount || 0 },
-  ];
-
-  const recentBehaviorSignals = (userProfile?.recentActivity || []).slice(0, 4);
 
   const recoveryPlan = useMemo(() => {
     return [
@@ -192,8 +165,6 @@ export function MirrorFeed() {
                           <div className="flex items-center gap-2 flex-wrap mb-2">
                             <Link to={`/dashboard/token/${entry.tokenSlug}`} className="text-foreground hover:text-primary transition-colors">{entry.tokenName}</Link>
                             <span className="px-2 py-1 rounded-full text-[11px] bg-warning/10 text-warning">{patternLabel(bucket)}</span>
-                            <span className="px-2 py-1 rounded-full text-[11px] bg-primary/10 text-primary">{sourceSurfaceLabel(entry.sourceSurface)}</span>
-                            {typeof entry.confidence === 'number' ? <span className="px-2 py-1 rounded-full text-[11px] bg-muted text-foreground-muted">{entry.confidence}% confidence</span> : null}
                             {token ? <span className={`px-2 py-1 rounded-full text-[11px] ${token.momentum === 'rising' ? 'bg-success/10 text-success' : token.momentum === 'falling' ? 'bg-destructive/10 text-destructive' : 'bg-muted text-foreground-muted'}`}>{token.momentum}</span> : null}
                           </div>
                           <p className="text-foreground leading-relaxed">{entry.missedAction}</p>
@@ -313,34 +284,6 @@ export function MirrorFeed() {
                   );
                 })}
               </div>
-            </div>
-
-            <div className="p-6 rounded-lg bg-card border border-card-border">
-              <h3 className="text-foreground mb-4">What Sloan used</h3>
-              <p className="text-sm text-muted-foreground mb-4">Mirror Feed now uses your signed-in activity instead of only relying on generic public examples.</p>
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                {activityCoverage.map((item) => (
-                  <div key={item.label} className="rounded-lg bg-background-subtle border border-border p-4">
-                    <p className="text-xs text-muted-foreground mb-1">{item.label}</p>
-                    <p className="text-xl text-foreground font-mono">{item.value}</p>
-                  </div>
-                ))}
-              </div>
-              {recentBehaviorSignals.length > 0 ? (
-                <div className="space-y-3">
-                  {recentBehaviorSignals.map((item) => (
-                    <div key={item.id} className="p-3 rounded-lg bg-background-subtle border border-border">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm text-foreground">{item.label}</p>
-                        <span className="text-xs text-muted-foreground">{new Date(item.timestamp).toLocaleDateString()}</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-2">{item.detail}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">Sloan will show your latest quest, prophet, forge, and raid actions here once more activity lands.</p>
-              )}
             </div>
 
             <div className="p-6 rounded-lg bg-card border border-card-border">

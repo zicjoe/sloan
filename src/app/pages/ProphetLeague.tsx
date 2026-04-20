@@ -1,254 +1,400 @@
-import { Trophy, TrendingUp, Target, Award, Clock3, CheckCircle2, XCircle } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
-import { SectionHeader } from '../components/SectionHeader';
-import { ProphetRow } from '../components/ProphetRow';
-import { PredictionCard } from '../components/PredictionCard';
-import { StatCard } from '../components/StatCard';
-import { LoadingState } from '../components/LoadingState';
+import { useSearchParams } from 'react-router';
+import { CheckCircle2, RefreshCw, Search, Target, TrendingUp, Zap } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext';
+import { ActiveCallCard } from '../components/ActiveCallCard';
+import { EmptyState } from '../components/EmptyState';
+import { FocusedTokenPanel } from '../components/FocusedTokenPanel';
+import { LeaderboardPanel } from '../components/LeaderboardPanel';
+import { LoadingSkeleton, LoadingState } from '../components/LoadingState';
+import { OpportunityCard } from '../components/OpportunityCard';
+import { ResolvedCallCard } from '../components/ResolvedCallCard';
 import { useApi, useMutation } from '../hooks/useApi';
 import { predictionApi, prophetApi, tokenApi } from '../services/api';
-import { useAuth } from '../auth/AuthContext';
-import { formatPercent, formatUsd } from '../lib/format';
-import type { Prediction, PredictionOpportunity } from '../types';
+import type { Prediction, PredictionOpportunity, PredictionConfidence, Token } from '../types';
+
+function confidenceLabelToPercent(confidence?: PredictionConfidence) {
+  switch (confidence) {
+    case 'high':
+      return 85;
+    case 'medium':
+      return 60;
+    case 'low':
+      return 35;
+    default:
+      return 50;
+  }
+}
+
+function percentToConfidenceLabel(value: number): PredictionConfidence {
+  if (value >= 75) return 'high';
+  if (value >= 45) return 'medium';
+  return 'low';
+}
+
+function formatSyncAge(value?: string) {
+  if (!value) return 'just now';
+  const ms = Date.now() - new Date(value).getTime();
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
+function uniqueOpportunityTokens(opportunities: PredictionOpportunity[], tokens: Token[]) {
+  const tokenBySlug = new Map(tokens.map((token) => [token.slug, token]));
+  const seen = new Set<string>();
+  const output: Token[] = [];
+
+  for (const opportunity of opportunities) {
+    if (seen.has(opportunity.tokenSlug)) continue;
+    const token = tokenBySlug.get(opportunity.tokenSlug);
+    if (!token) continue;
+    seen.add(opportunity.tokenSlug);
+    output.push(token);
+  }
+
+  if (output.length === 0) {
+    return [...tokens]
+      .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0))
+      .slice(0, 8);
+  }
+
+  return output;
+}
+
+function buildFocusedQuestion(token: Token, expiry: string, opportunity?: PredictionOpportunity) {
+  if (opportunity?.question) return opportunity.question;
+  const actionBias = token.actionBias === 'bearish' ? 'hold up' : 'extend';
+  return `Will ${token.name} ${actionBias} over the next ${expiry}?`;
+}
+
+function getOutcomeLabel(prediction: Prediction) {
+  if (prediction.status === 'correct') {
+    return prediction.scoreAwarded && prediction.scoreAwarded >= 12 ? 'Good Read' : 'Right Call';
+  }
+
+  if (prediction.status === 'incorrect') {
+    return prediction.binaryAnswer === 'yes' ? 'Weak Conviction' : 'Missed';
+  }
+
+  return 'Expired';
+}
 
 export function ProphetLeague() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { profile, isAuthenticated } = useAuth();
   const username = profile?.username || 'current_user';
   const [refreshKey, setRefreshKey] = useState(0);
-  const [selectedFeed, setSelectedFeed] = useState<'open' | 'resolved'>('open');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const { data: prophets, loading: prophetsLoading } = useApi(prophetApi.getLeaderboard, [refreshKey]);
+  const tokenFilter = searchParams.get('token') || '';
+
+  const { data: tokens, loading: tokensLoading } = useApi(tokenApi.getAll, [refreshKey]);
   const { data: predictions, loading: predictionsLoading, refetch } = useApi(predictionApi.getAll, [refreshKey]);
   const { data: opportunities, loading: opportunitiesLoading } = useApi(predictionApi.getOpportunities, [refreshKey]);
-  const { data: tokens } = useApi(tokenApi.getAll, [refreshKey]);
+  const { data: leaderboard, loading: leaderboardLoading } = useApi(prophetApi.getLeaderboard, [refreshKey]);
   const { mutate, loading: createLoading } = useMutation(predictionApi.create);
 
-  const loading = prophetsLoading || predictionsLoading || opportunitiesLoading;
+  const loading = tokensLoading || predictionsLoading || opportunitiesLoading || leaderboardLoading;
+
   const liveTokens = tokens || [];
+  const livePredictions = predictions || [];
+  const liveOpportunities = opportunities || [];
+  const liveLeaderboard = leaderboard || [];
+
+  const focusedToken = tokenFilter ? liveTokens.find((token) => token.slug === tokenFilter) : undefined;
+  const focusedOpportunity = tokenFilter ? liveOpportunities.find((item) => item.tokenSlug === tokenFilter) : undefined;
+
+  const opportunityTokens = useMemo(() => {
+    const mapped = uniqueOpportunityTokens(liveOpportunities, liveTokens);
+    return mapped.filter((token) => {
+      if (!searchQuery.trim()) return true;
+      const query = searchQuery.trim().toLowerCase();
+      return token.name.toLowerCase().includes(query) || token.ticker.toLowerCase().includes(query);
+    });
+  }, [liveOpportunities, liveTokens, searchQuery]);
 
   const myPredictions = useMemo(
-    () => (predictions || []).filter((prediction) => prediction.username === username),
-    [predictions],
+    () => livePredictions.filter((prediction) => prediction.username === username),
+    [livePredictions, username],
   );
 
-  const openPredictions = useMemo(
-    () => (predictions || []).filter((prediction) => prediction.status === 'pending'),
-    [predictions],
+  const activeCalls = useMemo(
+    () => myPredictions.filter((prediction) => prediction.status === 'pending'),
+    [myPredictions],
   );
 
-  const resolvedPredictions = useMemo(
-    () => (predictions || []).filter((prediction) => prediction.status !== 'pending'),
-    [predictions],
+  const resolvedCalls = useMemo(
+    () => myPredictions.filter((prediction) => prediction.status !== 'pending'),
+    [myPredictions],
   );
 
-  const recentFeed = selectedFeed === 'open' ? openPredictions : resolvedPredictions;
-  const currentProfile = (prophets || []).find((prophet) => prophet.username === username) || prophets?.[0];
-  const resolvedMine = myPredictions.filter((prediction) => prediction.status !== 'pending');
-  const correctMine = resolvedMine.filter((prediction) => prediction.status === 'correct');
-  const myScore = myPredictions.reduce((sum, prediction) => sum + (prediction.scoreAwarded || 0), 0);
-  const liveAccuracy = resolvedMine.length > 0 ? `${((correctMine.length / resolvedMine.length) * 100).toFixed(1)}%` : currentProfile ? `${currentProfile.accuracy.toFixed(1)}%` : '0%';
+  const correctCalls = resolvedCalls.filter((prediction) => prediction.status === 'correct');
+  const points = myPredictions.reduce((sum, prediction) => sum + (prediction.scoreAwarded || 0), 0);
+  const currentProfile = liveLeaderboard.find((entry) => entry.username === username) || liveLeaderboard[0];
+  const accuracy = resolvedCalls.length > 0
+    ? Number(((correctCalls.length / resolvedCalls.length) * 100).toFixed(1))
+    : Number(currentProfile?.accuracy?.toFixed?.(1) || 0);
+  const latestSync = useMemo(() => {
+    const values = liveTokens
+      .map((token) => token.lastSyncedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+    return values[0] || new Date().toISOString();
+  }, [liveTokens]);
 
-  async function answerOpportunity(opportunity: PredictionOpportunity, answer: 'yes' | 'no') {
-    if (!isAuthenticated) return;
-    const token = liveTokens.find((item) => item.slug === opportunity.tokenSlug);
+  async function handleSubmitCall(token: Token, call: { answer: 'yes' | 'no'; confidence: number; expiry: string; reason?: string }) {
+    const matchedOpportunity = liveOpportunities.find((item) => item.tokenSlug === token.slug) || focusedOpportunity;
     const result = await mutate({
-      tokenSlug: opportunity.tokenSlug,
-      prediction: answer === 'yes' ? 'moon' : 'dump',
-      timeframe: opportunity.timeframe,
-      reasoning: opportunity.reasoningHint,
-      callType: opportunity.callType,
-      confidence: opportunity.confidence,
-      question: opportunity.question,
-      binaryAnswer: answer,
-    } as any);
+      tokenSlug: token.slug,
+      prediction: call.answer === 'yes' ? 'moon' : 'dump',
+      timeframe: call.expiry,
+      reasoning: call.reason || matchedOpportunity?.reasoningHint || token.reasonLine || token.signalSummary || `${token.name} conviction call from Prophet League.`,
+      callType: matchedOpportunity?.callType || 'momentum',
+      confidence: percentToConfidenceLabel(call.confidence),
+      question: buildFocusedQuestion(token, call.expiry, matchedOpportunity),
+      binaryAnswer: call.answer,
+    } as Partial<Prediction> & { tokenSlug: string; prediction: Prediction['prediction']; reasoning: string; timeframe: string });
 
     if (result) {
       setRefreshKey((value) => value + 1);
       refetch();
-      setSelectedFeed('open');
     }
   }
 
-  function answeredForOpportunity(opportunity: PredictionOpportunity) {
-    return myPredictions.find(
-      (prediction) => prediction.tokenSlug === opportunity.tokenSlug && prediction.question === opportunity.question,
-    );
+  function handleRefresh() {
+    setRefreshKey((value) => value + 1);
   }
 
-  if (loading) {
+  function handleMakeCall(tokenSlug: string) {
+    setSearchParams({ token: tokenSlug });
+  }
+
+  if (loading && liveTokens.length === 0) {
     return <LoadingState message="Loading prophet league..." />;
   }
 
   return (
-    <div className="p-8 space-y-8">
-      <SectionHeader
-        title="Prophet League"
-        subtitle="Tap yes or no on live token questions and let Sloan score the call later"
-        icon={<Trophy className="w-5 h-5" />}
-      />
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard icon={<Target className="w-4 h-4 text-primary" />} label="Open calls" value={`${openPredictions.length}`} subtitle="awaiting resolution" />
-        <StatCard icon={<TrendingUp className="w-4 h-4 text-primary" />} label="Your hit rate" value={liveAccuracy} subtitle="resolved yes/no calls" />
-        <StatCard icon={<Award className="w-4 h-4 text-primary" />} label="Your score" value={`${myScore >= 0 ? '+' : ''}${myScore}`} subtitle="prophet points" trend={myScore >= 0 ? 'up' : 'down'} />
-        <StatCard icon={<Trophy className="w-4 h-4 text-primary" />} label="Your rank" value={currentProfile ? `#${currentProfile.rank}` : '—'} subtitle="live board" />
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.85fr] gap-6 items-start">
-        <div className="space-y-6">
-          <div className="p-6 rounded-lg bg-card border border-card-border space-y-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h3 className="text-foreground mb-1">Live prediction cards</h3>
-                <p className="text-sm text-muted-foreground">Sloan inspects live tokens, picks the cleanest question, and lets people answer with one tap.</p>
-              </div>
-              <span className="text-xs text-muted-foreground">{(opportunities || []).length} live cards</span>
+    <div className="min-h-screen bg-background">
+      <div className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm">
+        <div className="mx-auto max-w-[1600px] px-6 py-6">
+          <div className="mb-4 flex items-start justify-between gap-6">
+            <div>
+              <h1 className="mb-2 text-3xl font-bold text-foreground">Prophet League</h1>
+              <p className="text-muted-foreground">Make conviction calls on meme tokens and prove your edge</p>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              {(opportunities || []).map((opportunity) => {
-                const token = liveTokens.find((item) => item.slug === opportunity.tokenSlug);
-                const existing = answeredForOpportunity(opportunity);
-                return (
-                  <div key={opportunity.id} className="p-5 rounded-lg bg-background-subtle border border-border space-y-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-foreground">{opportunity.title}</p>
-                        <p className="text-xs text-muted-foreground mt-1">{opportunity.timeframe} • {opportunity.confidence} confidence</p>
-                      </div>
-                      <span className="px-2 py-1 rounded-full bg-primary/10 text-primary text-xs">AI picked</span>
-                    </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 text-sm">
+                <div className="h-2 w-2 animate-pulse rounded-full bg-success" />
+                <span className="text-muted-foreground">Live • Updated {formatSyncAge(latestSync)}</span>
+              </div>
 
-                    {token ? (
-                      <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
-                        <div>
-                          <p>Price</p>
-                          <p className="text-foreground font-mono">{formatUsd(token.price, { compact: false })}</p>
-                        </div>
-                        <div>
-                          <p>24h volume</p>
-                          <p className="text-foreground font-mono">{formatUsd(token.volume24h)}</p>
-                        </div>
-                        <div>
-                          <p>Holders</p>
-                          <p className="text-foreground font-mono">{token.holders || 0}</p>
-                        </div>
-                        <div>
-                          <p>24h change</p>
-                          <p className="text-foreground font-mono">{formatPercent(token.priceChange24h, { showPlus: true })}</p>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="p-4 rounded-lg bg-card border border-card-border">
-                      <p className="text-sm text-foreground leading-relaxed">{opportunity.question}</p>
-                      <p className="text-xs text-muted-foreground mt-2">{opportunity.reasoningHint}</p>
-                    </div>
-
-                    {existing ? (
-                      <div className="p-3 rounded-lg border border-border bg-card">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm text-foreground">You answered {existing.binaryAnswer === 'yes' ? 'Yes' : 'No'}</p>
-                            <p className="text-xs text-muted-foreground mt-1">Status: {existing.status}</p>
-                          </div>
-                          {existing.status === 'correct' ? <CheckCircle2 className="w-4 h-4 text-success" /> : existing.status === 'incorrect' ? <XCircle className="w-4 h-4 text-destructive" /> : <Clock3 className="w-4 h-4 text-warning" />}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-3">
-                        <button
-                          type="button"
-                          disabled={createLoading}
-                          onClick={() => answerOpportunity(opportunity, 'yes')}
-                          className="px-4 py-3 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all disabled:opacity-70"
-                        >
-                          {opportunity.yesLabel || 'Yes'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={createLoading}
-                          onClick={() => answerOpportunity(opportunity, 'no')}
-                          className="px-4 py-3 rounded-lg border border-border bg-card text-foreground hover:border-primary/40 transition-all disabled:opacity-70"
-                        >
-                          {opportunity.noLabel || 'No'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={loading}
+                className="rounded-lg border border-border bg-card p-2 transition-all hover:border-primary/40 disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 text-foreground ${loading ? 'animate-spin' : ''}`} />
+              </button>
             </div>
           </div>
 
-          <div className="p-6 rounded-lg bg-card border border-card-border">
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <div>
-                <h3 className="text-foreground mb-1">Prediction board</h3>
-                <p className="text-sm text-muted-foreground">Open and resolved yes or no calls scored against live token changes.</p>
-              </div>
-              <div className="inline-flex rounded-lg border border-border overflow-hidden">
-                <button type="button" onClick={() => setSelectedFeed('open')} className={`px-3 py-2 text-sm ${selectedFeed === 'open' ? 'bg-primary text-primary-foreground' : 'bg-background-subtle text-foreground-muted'}`}>Open</button>
-                <button type="button" onClick={() => setSelectedFeed('resolved')} className={`px-3 py-2 text-sm ${selectedFeed === 'resolved' ? 'bg-primary text-primary-foreground' : 'bg-background-subtle text-foreground-muted'}`}>Resolved</button>
-              </div>
-            </div>
-            <div className="space-y-4">
-              {recentFeed.length > 0 ? recentFeed.map((prediction) => (
-                <PredictionCard key={prediction.id} prediction={prediction} />
-              )) : (
-                <div className="p-4 rounded-lg bg-background-subtle text-sm text-foreground-muted">
-                  No {selectedFeed} calls yet. Tap yes or no on a live card above to activate this board.
-                </div>
-              )}
-            </div>
+          <div className="relative max-w-md">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search tokens..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              className="w-full rounded-lg border border-border bg-input-background py-2 pl-10 pr-4 text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+            />
           </div>
         </div>
+      </div>
 
-        <div className="space-y-6 xl:sticky xl:top-24">
-          <div className="p-6 rounded-lg bg-card border border-card-border">
-            <div className="mb-4">
-              <h3 className="text-foreground mb-1">How Prophet League works</h3>
-              <p className="text-sm text-muted-foreground">Keep the action simple. Sloan chooses the question. Users only answer yes or no.</p>
-            </div>
-            <div className="space-y-3 text-sm text-foreground-muted">
-              <div className="p-3 rounded-lg bg-background-subtle border border-border"><span className="text-foreground">1.</span> Sloan reads live token state and picks the cleanest prediction question.</div>
-              <div className="p-3 rounded-lg bg-background-subtle border border-border"><span className="text-foreground">2.</span> Users tap <span className="text-foreground">Yes</span> or <span className="text-foreground">No</span> instead of filling long forms.</div>
-              <div className="p-3 rounded-lg bg-background-subtle border border-border"><span className="text-foreground">3.</span> After the window closes, Sloan resolves the call against live token data.</div>
-            </div>
-          </div>
+      <div className="mx-auto max-w-[1600px] px-6 py-8">
+        <div className="grid gap-8 lg:grid-cols-[1fr,340px]">
+          <div className="space-y-8">
+            {focusedToken ? (
+              <FocusedTokenPanel
+                token={{
+                  ...focusedToken,
+                  image: focusedToken.image || '',
+                }}
+                onSubmitCall={(call) => handleSubmitCall(focusedToken, call)}
+              />
+            ) : null}
 
-          <div className="p-6 rounded-lg bg-card border border-card-border">
-            <h3 className="text-foreground mb-4">Top prophets</h3>
-            <div className="space-y-3">
-              {(prophets || []).length > 0 ? (prophets || []).map((prophet, index) => (
-                <ProphetRow key={prophet.username} prophet={prophet} rank={index} variant="detailed" />
-              )) : (
-                <div className="p-4 rounded-lg bg-background-subtle text-sm text-foreground-muted">
-                  No prophet board yet. Sloan will rank people as soon as calls are made and resolved.
+            <section>
+              <div className="mb-6 flex items-center gap-3">
+                <Zap className="h-6 w-6 text-primary" />
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">Live Opportunities</h2>
+                  <p className="text-sm text-muted-foreground">Tokens available for calls right now</p>
                 </div>
+              </div>
+
+              {loading ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {[1, 2, 3, 4].map((index) => (
+                    <LoadingSkeleton key={index} className="h-[370px]" />
+                  ))}
+                </div>
+              ) : opportunityTokens.length > 0 ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {opportunityTokens.map((token) => (
+                    <OpportunityCard
+                      key={token.slug}
+                      token={{
+                        ...token,
+                        image: token.image || '',
+                      }}
+                      onMakeCall={handleMakeCall}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  icon={<Zap className="h-6 w-6" />}
+                  title="No opportunities match your search"
+                  description="Try adjusting your search or check back after the next sync."
+                />
               )}
-            </div>
+            </section>
+
+            <section>
+              <div className="mb-6 flex items-center gap-3">
+                <Target className="h-6 w-6 text-warning" />
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">Active Calls</h2>
+                  <p className="text-sm text-muted-foreground">Your pending predictions in flight</p>
+                </div>
+              </div>
+
+              {activeCalls.length > 0 ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {activeCalls.map((prediction) => {
+                    const token = liveTokens.find((item) => item.slug === prediction.tokenSlug);
+                    return (
+                      <ActiveCallCard
+                        key={prediction.id}
+                        call={{
+                          id: prediction.id,
+                          token: {
+                            name: prediction.tokenName,
+                            ticker: token?.ticker || prediction.tokenName.slice(0, 4).toUpperCase(),
+                            image: token?.image || '',
+                            currentPrice: token?.price,
+                          },
+                          question: prediction.question || `Will ${prediction.tokenName} stay strong over ${prediction.timeframe}?`,
+                          answer: prediction.binaryAnswer || (prediction.prediction === 'moon' ? 'yes' : 'no'),
+                          confidence: confidenceLabelToPercent(prediction.confidence),
+                          expiry: prediction.timeframe,
+                          createdAt: prediction.timestamp,
+                          baselinePrice: prediction.baselinePrice,
+                          baselineVolume: prediction.baselineVolume24h,
+                          baselineHolders: prediction.baselineHolders,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <EmptyState
+                  icon={<Target className="h-6 w-6" />}
+                  title={isAuthenticated ? 'No active calls' : 'Sign in to track calls'}
+                  description={isAuthenticated ? 'Make your first call on a live opportunity to track it here.' : 'Your live predictions and scoring history appear here once you are signed in.'}
+                />
+              )}
+            </section>
+
+            <section>
+              <div className="mb-6 flex items-center gap-3">
+                <CheckCircle2 className="h-6 w-6 text-success" />
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">Resolved Calls</h2>
+                  <p className="text-sm text-muted-foreground">Learn from your outcomes</p>
+                </div>
+              </div>
+
+              {resolvedCalls.length > 0 ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {resolvedCalls.map((prediction) => {
+                    const token = liveTokens.find((item) => item.slug === prediction.tokenSlug);
+                    return (
+                      <ResolvedCallCard
+                        key={prediction.id}
+                        call={{
+                          id: prediction.id,
+                          token: {
+                            name: prediction.tokenName,
+                            ticker: token?.ticker || prediction.tokenName.slice(0, 4).toUpperCase(),
+                            image: token?.image || '',
+                          },
+                          question: prediction.question || `How did ${prediction.tokenName} behave over ${prediction.timeframe}?`,
+                          answer: prediction.binaryAnswer || (prediction.prediction === 'moon' ? 'yes' : 'no'),
+                          confidence: confidenceLabelToPercent(prediction.confidence),
+                          result: prediction.status === 'correct' ? 'correct' : prediction.status === 'incorrect' ? 'incorrect' : 'expired',
+                          scoreAwarded: prediction.scoreAwarded || 0,
+                          resolutionNote: prediction.resolutionNote || 'Sloan resolved this call from live token movement and the baseline snapshot.',
+                          createdAt: prediction.timestamp,
+                          resolvedAt: prediction.expiresAt || prediction.timestamp,
+                          outcomeLabel: getOutcomeLabel(prediction),
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <EmptyState
+                  icon={<CheckCircle2 className="h-6 w-6" />}
+                  title="No resolved calls yet"
+                  description="Your completed predictions will appear here with outcomes and scores."
+                />
+              )}
+            </section>
           </div>
 
-          <div className="p-6 rounded-lg bg-card border border-card-border">
-            <h3 className="text-foreground mb-4">Your recent calls</h3>
-            <div className="space-y-3">
-              {myPredictions.slice(0, 4).map((prediction) => (
-                <div key={prediction.id} className="p-3 rounded-lg bg-background-subtle border border-border">
-                  <div className="flex items-center justify-between gap-3 mb-1">
-                    <span className="text-sm text-foreground">{prediction.tokenName}</span>
-                    <span className={`text-xs px-2 py-1 rounded-full ${prediction.status === 'correct' ? 'bg-success/10 text-success' : prediction.status === 'incorrect' ? 'bg-destructive/10 text-destructive' : 'bg-warning/10 text-warning'}`}>{prediction.status}</span>
-                  </div>
-                  <p className="text-sm text-foreground mb-2">{prediction.question || `${prediction.tokenName} call`}</p>
-                  <p className="text-xs text-muted-foreground">You answered {prediction.binaryAnswer === 'yes' ? 'Yes' : prediction.binaryAnswer === 'no' ? 'No' : prediction.prediction === 'moon' ? 'Yes' : 'No'} • {prediction.timeframe}</p>
-                </div>
-              ))}
-              {myPredictions.length === 0 ? (
-                <div className="p-3 rounded-lg bg-background-subtle text-sm text-foreground-muted">
-                  You have not made a prophet call yet.
-                </div>
-              ) : null}
+          <div className="space-y-6 lg:sticky lg:top-24 lg:self-start">
+            <LeaderboardPanel
+              userStats={{
+                rank: currentProfile?.rank,
+                accuracy,
+                totalCalls: myPredictions.length,
+                resolvedCalls: resolvedCalls.length,
+                points,
+              }}
+              topProphets={liveLeaderboard.slice(0, 5).map((entry) => ({
+                rank: entry.rank,
+                username: entry.username,
+                avatar: (entry as any).avatar,
+                accuracy: Number(entry.accuracy.toFixed(1)),
+                points: entry.correctPredictions * 10,
+                totalCalls: entry.totalPredictions,
+              }))}
+            />
+
+            <div className="rounded-lg border border-primary/20 bg-gradient-to-br from-primary/5 to-transparent p-5">
+              <h3 className="mb-3 font-semibold text-foreground">Pro Tips</h3>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li className="flex items-start gap-2">
+                  <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <span>Higher confidence on correct calls helps your profile read stronger over time.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <span>Shorter windows are cleaner when the setup already has visible momentum behind it.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <span>Best calls are usually built from token context, not from crowd noise alone.</span>
+                </li>
+              </ul>
             </div>
           </div>
         </div>

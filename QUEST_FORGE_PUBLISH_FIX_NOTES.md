@@ -1,1 +1,0 @@
-Run supabase/quest_forge_owner_patch.sql again in Supabase SQL Editor. It now adds the missing RLS insert/update policies for public.quests so owner-published quests can actually be saved and then appear in Quest Arena.

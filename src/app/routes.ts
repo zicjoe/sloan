@@ -3,6 +3,7 @@ import { Layout } from './components/Layout';
 import { AuthPage } from './pages/AuthPage';
 import { Landing } from './pages/Landing';
 import { Home } from './pages/Home';
+import { CommandCenter } from './pages/CommandCenter';
 import { TokenPage } from './pages/TokenPage';
 import { LaunchForge } from './pages/LaunchForge';
 import { RaidStudio } from './pages/RaidStudio';
@@ -28,7 +29,8 @@ export const router = createBrowserRouter([
     path: '/dashboard',
     Component: Layout,
     children: [
-      { index: true, Component: Home },
+      { index: true, Component: CommandCenter },
+      { path: 'classic', Component: Home },
       { path: 'token/:slug', Component: TokenPage },
       { path: 'forge', Component: LaunchForge },
       { path: 'raid-studio', Component: RaidStudio },

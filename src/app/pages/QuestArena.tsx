@@ -20,6 +20,7 @@ const categoryLabels: Record<string, string> = {
 export function QuestArena() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedCategory = searchParams.get('category') || 'all';
+  const tokenFilter = searchParams.get('token') || '';
 
   const { data: quests, loading } = useApi(questApi.getAll);
   const { data: myActivity } = useApi(questApi.getMyActivity);
@@ -42,9 +43,17 @@ export function QuestArena() {
     ];
   }, [liveQuests]);
 
-  const filteredQuests = selectedCategory === 'all'
+  const categoryScopedQuests = selectedCategory === 'all'
     ? liveQuests
     : liveQuests.filter((quest) => quest.category === selectedCategory);
+
+  const filteredQuests = tokenFilter
+    ? categoryScopedQuests.filter((quest) => quest.tokenSlug === tokenFilter)
+    : categoryScopedQuests;
+
+  const filteredTokenName = tokenFilter
+    ? liveQuests.find((quest) => quest.tokenSlug === tokenFilter)?.tokenName || tokenFilter.toUpperCase()
+    : '';
 
   const completedCount = liveQuests.filter((quest) => quest.completed).length;
   const activeCount = liveQuests.filter((quest) => !quest.completed).length;
@@ -96,7 +105,12 @@ export function QuestArena() {
         {categories.map((category) => (
           <button
             key={category.id}
-            onClick={() => setSearchParams(category.id === 'all' ? {} : { category: category.id })}
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (category.id !== 'all') params.set('category', category.id);
+              if (tokenFilter) params.set('token', tokenFilter);
+              setSearchParams(params);
+            }}
             className={`px-4 py-2 rounded-lg border transition-all whitespace-nowrap ${selectedCategory === category.id ? 'bg-primary/10 text-primary border-primary/40' : 'bg-card text-muted-foreground border-border hover:border-primary/20'}`}
           >
             {category.label}
@@ -104,6 +118,23 @@ export function QuestArena() {
           </button>
         ))}
       </div>
+
+      {tokenFilter ? (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm text-foreground">
+          Showing quests for <span className="text-primary">{filteredTokenName}</span>.
+          <button
+            type="button"
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (selectedCategory !== 'all') params.set('category', selectedCategory);
+              setSearchParams(params);
+            }}
+            className="ml-3 text-primary hover:underline"
+          >
+            Clear token filter
+          </button>
+        </div>
+      ) : null}
 
       {filteredQuests.length > 0 ? (
         <div className="space-y-6">
@@ -130,7 +161,7 @@ export function QuestArena() {
         </div>
       ) : (
         <div className="space-y-4">
-          <EmptyState icon={<Swords className="w-8 h-8" />} title="No live quests in this category" description="Publish a mission from Quest Forge and it will appear here for the community instantly." />
+          <EmptyState icon={<Swords className="w-8 h-8" />} title={tokenFilter ? `No live quests for ${filteredTokenName}` : 'No live quests in this category'} description={tokenFilter ? 'Sloan checked this token and found no active quest yet.' : 'Publish a mission from Quest Forge and it will appear here for the community instantly.'} />
           <Link
             to="/dashboard/quests/forge"
             className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-sm text-primary transition hover:bg-primary/15"
