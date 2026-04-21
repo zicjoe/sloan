@@ -1,170 +1,112 @@
-import { TrendingUp, TrendingDown, AlertTriangle, Bot, Shield, Twitter, Droplet, Zap } from 'lucide-react';
-import { formatPrice, formatNumber } from '../lib/utils';
+import { AlertTriangle, Bot, Droplet, Shield, TrendingDown, TrendingUp, Twitter, Zap } from 'lucide-react';
+import type { PredictionOpportunity, Token } from '../types';
+import { formatNumber, formatPrice } from '../lib/utils';
 
 interface OpportunityCardProps {
-  token: {
-    id: string;
-    slug: string;
-    name: string;
-    ticker: string;
-    image: string;
-    price: number;
-    priceChange24h: number;
-    volume24h?: number;
-    holders?: number;
-    category?: string;
-    launchAge?: string;
-    isAICreated?: boolean;
-    isXMode?: boolean;
-    isAntiSniper?: boolean;
-    isTaxToken?: boolean;
-    taxRate?: number;
-    isPancake?: boolean;
-    signalSummary?: string;
-    reasonLine?: string;
-  };
-  onMakeCall?: (tokenSlug: string) => void;
+  token: Token;
+  opportunity: PredictionOpportunity;
+  onMakeCall?: (tokenSlug: string, opportunityId: string) => void;
 }
 
-export function OpportunityCard({ token, onMakeCall }: OpportunityCardProps) {
-  const getStatusBadge = () => {
-    if (token.launchAge && token.launchAge.includes('min')) return { label: 'Early', color: 'success' };
-    if (token.launchAge && (token.launchAge.includes('hour') || token.launchAge.includes('day'))) {
-      const hours = token.launchAge.includes('hour') ? parseInt(token.launchAge) : parseInt(token.launchAge) * 24;
-      if (hours < 48) return { label: 'Early', color: 'success' };
-    }
-    if (token.volume24h && token.volume24h > 5000000) return { label: 'Liquid', color: 'primary' };
-    if (token.priceChange24h > 50) return { label: 'Hot', color: 'warning' };
-    if (token.isPancake) return { label: 'Graduated', color: 'secondary' };
-    if (token.isTaxToken) return { label: 'Risk', color: 'destructive' };
-    return null;
-  };
+function callTypeLabel(callType: PredictionOpportunity['callType']) {
+  switch (callType) {
+    case 'hold_strength':
+      return 'Hold Strength';
+    case 'outperform':
+      return 'Outperform';
+    case 'graduation':
+      return 'Graduation';
+    case 'breakdown':
+      return 'Breakdown';
+    case 'momentum':
+    default:
+      return 'Momentum';
+  }
+}
 
-  const statusBadge = getStatusBadge();
-
-  const getOneMechanicBadge = () => {
-    if (token.isAICreated) return { icon: Bot, label: 'AI Created', color: 'purple' };
-    if (token.isXMode) return { icon: Twitter, label: 'X Mode', color: 'blue' };
-    if (token.isAntiSniper) return { icon: Shield, label: 'Anti-Sniper', color: 'green' };
-    if (token.isTaxToken) return { icon: AlertTriangle, label: `Tax ${token.taxRate}%`, color: 'red' };
-    if (token.isPancake) return { icon: Droplet, label: 'Pancake', color: 'purple' };
-    return null;
-  };
-
-  const mechanicBadge = getOneMechanicBadge();
+export function OpportunityCard({ token, opportunity, onMakeCall }: OpportunityCardProps) {
+  const mechanicBadges = [
+    token.isAICreated && { icon: Bot, label: 'AI Created', color: 'purple' },
+    token.isXMode && { icon: Twitter, label: 'X Mode', color: 'blue' },
+    token.isAntiSniper && { icon: Shield, label: 'Anti-Sniper', color: 'green' },
+    token.isTaxToken && { icon: AlertTriangle, label: `Tax ${token.taxRate}%`, color: 'red' },
+    token.isPancake && { icon: Droplet, label: 'Pancake', color: 'purple' },
+  ].filter(Boolean) as Array<{ icon: any; label: string; color: string }>;
 
   return (
-    <div className="p-5 rounded-lg bg-card border border-card-border hover:border-primary/40 transition-all group">
-      {/* Token Header */}
-      <div className="flex items-start gap-3 mb-4">
+    <div className="rounded-lg border border-card-border bg-card p-5 transition-all hover:border-primary/40 group">
+      <div className="mb-4 flex items-start gap-3">
         <img
           src={token.image || 'https://placehold.co/96x96/111827/94a3b8?text=%24'}
           alt={token.name}
-          className="w-12 h-12 rounded-full ring-2 ring-border group-hover:ring-primary/30 transition-all"
+          className="h-12 w-12 rounded-full ring-2 ring-border transition-all group-hover:ring-primary/30"
         />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-semibold text-foreground truncate">{token.name}</h3>
-            {statusBadge && (
-              <span
-                className={`
-                  px-1.5 py-0.5 rounded text-xs font-medium shrink-0
-                  ${statusBadge.color === 'success' ? 'bg-success/10 text-success' : ''}
-                  ${statusBadge.color === 'primary' ? 'bg-primary/10 text-primary' : ''}
-                  ${statusBadge.color === 'warning' ? 'bg-warning/10 text-warning' : ''}
-                  ${statusBadge.color === 'secondary' ? 'bg-secondary/10 text-secondary' : ''}
-                  ${statusBadge.color === 'destructive' ? 'bg-destructive/10 text-destructive' : ''}
-                `}
-              >
-                {statusBadge.label}
-              </span>
-            )}
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-center gap-2">
+            <h3 className="truncate font-semibold text-foreground">{token.name}</h3>
+            <span className="rounded px-1.5 py-0.5 text-xs font-medium bg-primary/10 text-primary shrink-0">
+              {callTypeLabel(opportunity.callType)}
+            </span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">${token.ticker}</span>
-            {token.category && (
-              <span className="text-xs text-muted-foreground">• {token.category}</span>
-            )}
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>${token.ticker}</span>
+            {token.category ? <span>• {token.category}</span> : null}
+            {opportunity.tokenState ? <span>• {opportunity.tokenState}</span> : null}
           </div>
         </div>
       </div>
 
-      {/* Price */}
-      <div className="flex items-baseline gap-3 mb-3">
-        <div className="text-xl font-bold font-mono text-foreground">
-          {formatPrice(token.price)}
-        </div>
-        <div className={`flex items-center gap-1 text-sm font-medium ${
-          token.priceChange24h >= 0 ? 'text-success' : 'text-destructive'
-        }`}>
-          {token.priceChange24h >= 0 ? (
-            <TrendingUp className="w-4 h-4" />
-          ) : (
-            <TrendingDown className="w-4 h-4" />
-          )}
+      <div className="mb-3 flex items-baseline gap-3">
+        <div className="font-mono text-xl font-bold text-foreground">{formatPrice(token.price)}</div>
+        <div className={`flex items-center gap-1 text-sm font-medium ${token.priceChange24h >= 0 ? 'text-success' : 'text-destructive'}`}>
+          {token.priceChange24h >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
           {token.priceChange24h >= 0 ? '+' : ''}{token.priceChange24h.toFixed(1)}%
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="flex items-center gap-3 mb-4 text-xs">
-        {token.volume24h !== undefined && (
+      <div className="mb-4 flex items-center gap-3 text-xs">
+        <div>
+          <span className="text-muted-foreground">Vol: </span>
+          <span className="font-mono text-foreground">{formatNumber(token.volume24h || 0)}</span>
+        </div>
+        {typeof token.liquidity === 'number' ? (
           <div>
-            <span className="text-muted-foreground">Vol: </span>
-            <span className="font-mono text-foreground">{formatNumber(token.volume24h)}</span>
+            <span className="text-muted-foreground">Liq: </span>
+            <span className="font-mono text-foreground">{formatNumber(token.liquidity || 0)}</span>
           </div>
-        )}
-        {token.holders !== undefined && (
-          <div>
-            <span className="text-muted-foreground">Holders: </span>
-            <span className="font-mono text-foreground">{formatNumber(token.holders)}</span>
-          </div>
-        )}
+        ) : null}
       </div>
 
-      {/* Mechanic Badge */}
-      {mechanicBadge && (
-        <div className="mb-4">
-          {(() => {
-            const Icon = mechanicBadge.icon;
+      <div className="mb-3 rounded border border-primary/10 bg-primary/5 p-3">
+        <div className="mb-1 text-xs font-medium text-primary">AI Call Read</div>
+        <p className="line-clamp-3 text-xs leading-relaxed text-foreground">{opportunity.reasoningHint}</p>
+      </div>
+
+      {opportunity.whyNow ? (
+        <div className="mb-3">
+          <p className="text-xs text-muted-foreground line-clamp-2">{opportunity.whyNow}</p>
+        </div>
+      ) : null}
+
+      {mechanicBadges.length > 0 ? (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {mechanicBadges.slice(0, 2).map((badge, index) => {
+            const Icon = badge.icon;
             return (
-              <span
-                className={`
-                  inline-flex items-center gap-1 px-2 py-1 rounded text-xs border
-                  ${mechanicBadge.color === 'purple' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : ''}
-                  ${mechanicBadge.color === 'blue' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : ''}
-                  ${mechanicBadge.color === 'green' ? 'bg-green-500/10 text-green-400 border-green-500/20' : ''}
-                  ${mechanicBadge.color === 'red' ? 'bg-red-500/10 text-red-400 border-red-500/20' : ''}
-                `}
-              >
-                <Icon className="w-3 h-3" />
-                {mechanicBadge.label}
+              <span key={index} className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs ${badge.color === 'purple' ? 'border-purple-500/20 bg-purple-500/10 text-purple-400' : ''}${badge.color === 'blue' ? ' border-blue-500/20 bg-blue-500/10 text-blue-400' : ''}${badge.color === 'green' ? ' border-green-500/20 bg-green-500/10 text-green-400' : ''}${badge.color === 'red' ? ' border-red-500/20 bg-red-500/10 text-red-400' : ''}`}>
+                <Icon className="h-3 w-3" />
+                {badge.label}
               </span>
             );
-          })()}
+          })}
         </div>
-      )}
+      ) : null}
 
-      {/* Signal Summary */}
-      {token.signalSummary && (
-        <div className="p-3 rounded bg-primary/5 border border-primary/10 mb-3">
-          <p className="text-xs text-foreground leading-relaxed line-clamp-2">{token.signalSummary}</p>
-        </div>
-      )}
-
-      {/* Reason Line */}
-      {token.reasonLine && (
-        <div className="mb-4">
-          <p className="text-xs text-muted-foreground line-clamp-1">{token.reasonLine}</p>
-        </div>
-      )}
-
-      {/* Make Call Action */}
       <button
-        onClick={() => onMakeCall?.(token.slug)}
-        className="w-full px-4 py-3 rounded-lg bg-primary/10 text-primary border border-primary/30 hover:bg-primary hover:text-primary-foreground transition-all font-medium flex items-center justify-center gap-2 group-hover:shadow-[0_0_15px_rgba(74,222,255,0.3)]"
+        onClick={() => onMakeCall?.(token.slug, opportunity.id)}
+        className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 font-medium text-primary transition-all hover:bg-primary hover:text-primary-foreground group-hover:shadow-[0_0_15px_rgba(74,222,255,0.3)]"
       >
-        <Zap className="w-4 h-4" />
+        <Zap className="h-4 w-4" />
         Make Call
       </button>
     </div>

@@ -152,7 +152,7 @@ export interface QuestLiveEvent {
   timestamp: string;
 }
 
-export type PredictionCallType = 'momentum' | 'relative_strength' | 'volume' | 'survival' | 'holders' | 'price';
+export type PredictionCallType = 'momentum' | 'hold_strength' | 'outperform' | 'graduation' | 'breakdown';
 export type PredictionConfidence = 'low' | 'medium' | 'high';
 
 export interface Prediction {
@@ -176,6 +176,7 @@ export interface Prediction {
   baselinePrice?: number;
   baselineVolume24h?: number;
   baselineHolders?: number;
+  baselineLiquidity?: number;
   resolutionNote?: string;
   scoreAwarded?: number;
   question?: string;
@@ -194,6 +195,9 @@ export interface PredictionOpportunity {
   confidence: PredictionConfidence;
   reasoningHint: string;
   question: string;
+  whyNow?: string;
+  resolutionRule?: string;
+  tokenState?: 'cold' | 'emerging' | 'heating' | 'crowded' | 'fragile' | 'graduating';
   yesLabel?: string;
   noLabel?: string;
 }

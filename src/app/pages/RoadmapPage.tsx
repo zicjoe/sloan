@@ -13,58 +13,10 @@ type RoadmapPhase = {
   bullets: string[];
 };
 
-const roadmapPhases: RoadmapPhase[] = [
-  {
-    phase: 'Phase 1',
-    title: 'Sharpen the core',
-    body: 'Tighten the product surfaces Sloan already has so the core workflow feels cleaner, faster, and more reliable from signal to action.',
-    bullets: [
-      'Command Center, Prophet, Quest, Launch, Raid, Passport, and Mirror',
-      'production cleanup and stronger persistence',
-      'better live UX flow across the core pages',
-      'cleaner Figma-based interface upgrades',
-    ],
-  },
-  {
-    phase: 'Phase 2',
-    title: 'Make it smarter',
-    body: 'Strengthen Sloan’s intelligence layer so the product does more than display information. It should read situations better and generate better actions.',
-    bullets: [
-      'better signals',
-      'better Prophet call types and resolution logic',
-      'better quest diagnosis',
-      'better Launch Forge intelligence',
-    ],
-  },
-  {
-    phase: 'Phase 3',
-    title: 'Make it strategic',
-    body: 'Move beyond one-off actions and help users operate memes with more planning, more context, and stronger lifecycle support.',
-    bullets: [
-      'revival workflows',
-      'campaign mode',
-      'creator growth planning',
-      'behavior coaching',
-    ],
-  },
-  {
-    phase: 'Phase 4',
-    title: 'Make it sticky',
-    body: 'Make Sloan feel alive and persistent so users come back for timing, progression, recommendations, and ongoing edge.',
-    bullets: [
-      'alerts',
-      'seasons',
-      'reputation',
-      'live recommendations',
-      'stronger progression',
-    ],
-  },
-];
-
 const roadmapLanes: RoadmapLane[] = [
   {
     title: 'Better signal intelligence',
-    body: 'This lane exists because Sloan needs to get faster and sharper at reading what is happening around a token.',
+    body: 'Make Sloan better at reading what is happening around a token so users can spot heat earlier and understand why it matters now.',
     bullets: [
       'stronger Command Center signals',
       'Pancake and graduation awareness',
@@ -76,7 +28,7 @@ const roadmapLanes: RoadmapLane[] = [
   },
   {
     title: 'Better conviction infrastructure',
-    body: 'This lane exists because Prophet League should become more serious, more dynamic, and harder to game.',
+    body: 'Make Prophet League more serious, more dynamic, and harder to game so conviction has real structure behind it.',
     bullets: [
       'dynamic call types',
       'cleaner anti-manipulation rules',
@@ -88,7 +40,7 @@ const roadmapLanes: RoadmapLane[] = [
   },
   {
     title: 'Better creator growth tools',
-    body: 'This lane exists because Sloan should help creators across launch, revival, and momentum, not only at the moment of launch.',
+    body: 'Make Sloan stronger for meme creators across launch, revival, and sustained momentum instead of stopping at day-one launch support.',
     bullets: [
       'better Launch Forge output',
       'smarter Quest Forge suggestions',
@@ -101,7 +53,7 @@ const roadmapLanes: RoadmapLane[] = [
   },
   {
     title: 'Better feedback and progression',
-    body: 'This lane exists because Sloan should learn from user behavior and give better feedback over time.',
+    body: 'Make Sloan learn from user behavior and give more useful feedback over time so the product feels like a system, not a loose set of tools.',
     bullets: [
       'stronger Mirror Feed',
       'better Passport progression',
@@ -109,6 +61,50 @@ const roadmapLanes: RoadmapLane[] = [
       'pattern detection',
       'personal recommendations',
       'what-to-do-next intelligence',
+    ],
+  },
+];
+
+const roadmapPhases: RoadmapPhase[] = [
+  {
+    phase: 'Now',
+    title: 'Stabilizing the core workflow',
+    body: 'Sharpen the parts of Sloan that already exist so the product feels cleaner, faster, and more reliable across the full core experience.',
+    bullets: [
+      'production cleanup',
+      'stronger auth and persistence',
+      'improved Command Center',
+      'Figma-based UI upgrades',
+      'better Prophet League flow',
+      'smarter Quest Forge',
+      'stronger Launch Forge output',
+    ],
+  },
+  {
+    phase: 'Next',
+    title: 'Making Sloan smarter',
+    body: 'Move beyond surface polish and strengthen Sloan’s intelligence layer for reading tokens, generating calls, and guiding creators better.',
+    bullets: [
+      'dynamic Prophet call types',
+      'stronger token intelligence and signal weighting',
+      'better quest recommendations based on token condition',
+      'better creator workflows for live, fading, and new memes',
+      'alerts and watchlists',
+      'stronger leaderboard and scoring logic',
+    ],
+  },
+  {
+    phase: 'Later',
+    title: 'Building the full memecoin operating layer',
+    body: 'Turn Sloan from a strong toolset into a strategic operating layer for launch, momentum, revival, conviction, and community action.',
+    bullets: [
+      'meme revival workflows',
+      'seasonal Prophet competition',
+      'creator campaign planner',
+      'deeper Mirror Feed behavior coaching',
+      'stronger community action loops',
+      'richer Passport progression and reputation',
+      'cross-token strategy intelligence',
     ],
   },
 ];
@@ -150,30 +146,29 @@ export function RoadmapPage() {
     <StaticContentPage
       eyebrow="Roadmap"
       title="Where Sloan is going as a product"
-      intro="Sloan is becoming the intelligence and action layer for the full memecoin lifecycle, from launch, to momentum, to revival, to conviction, to community action."
+      intro="Sloan is evolving from a memecoin dashboard into an intelligence and action layer for the full memecoin lifecycle, from launch, to momentum, to revival, to conviction, to community action."
     >
       <div className="space-y-10">
         <section className="rounded-3xl border border-card-border bg-background/30 p-7 md:p-8">
           <p className="text-sm uppercase tracking-[0.18em] text-primary mb-4">Roadmap spine</p>
           <h2 className="text-3xl text-foreground mb-4">We are building Sloan into the system that helps memes launch better, move smarter, and stay alive longer.</h2>
           <p>
-            The roadmap is product-led. The phases are the real roadmap. The supporting lanes below explain why those phases exist and what kinds of systems Sloan needs to become stronger over time.
+            The roadmap is focused on a product direction, not a list of random feature wishes. Sloan grows by strengthening signal quality, conviction infrastructure, creator growth tools, and user feedback over time.
           </p>
         </section>
 
         <section>
           <div className="mb-6">
-            <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">Main roadmap</p>
-            <h2 className="text-3xl text-foreground">Phase 1 to Phase 4</h2>
+            <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">The big roadmap direction</p>
+            <h2 className="text-3xl text-foreground">Four lanes of product growth</h2>
           </div>
-          <div className="grid gap-6">
-            {roadmapPhases.map((item) => (
-              <div key={item.phase} className="rounded-2xl border border-card-border bg-background/30 p-6">
-                <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">{item.phase}</p>
-                <h3 className="text-2xl text-foreground mb-3">{item.title}</h3>
-                <p className="mb-5">{item.body}</p>
+          <div className="grid gap-6 lg:grid-cols-2">
+            {roadmapLanes.map((lane) => (
+              <div key={lane.title} className="rounded-2xl border border-card-border bg-background/30 p-6">
+                <h3 className="text-2xl text-foreground mb-3">{lane.title}</h3>
+                <p className="mb-5">{lane.body}</p>
                 <ul className="space-y-2 text-muted-foreground">
-                  {item.bullets.map((bullet) => (
+                  {lane.bullets.map((bullet) => (
                     <li key={bullet} className="flex gap-3">
                       <span className="mt-1 h-2 w-2 rounded-full bg-primary/80" />
                       <span>{bullet}</span>
@@ -187,16 +182,17 @@ export function RoadmapPage() {
 
         <section>
           <div className="mb-6">
-            <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">Why these phases exist</p>
-            <h2 className="text-3xl text-foreground">The four growth lanes behind the roadmap</h2>
+            <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">Best roadmap structure</p>
+            <h2 className="text-3xl text-foreground">Now, next, later</h2>
           </div>
-          <div className="grid gap-6 lg:grid-cols-2">
-            {roadmapLanes.map((lane) => (
-              <div key={lane.title} className="rounded-2xl border border-card-border bg-background/30 p-6">
-                <h3 className="text-2xl text-foreground mb-3">{lane.title}</h3>
-                <p className="mb-5">{lane.body}</p>
+          <div className="grid gap-6">
+            {roadmapPhases.map((item) => (
+              <div key={item.title} className="rounded-2xl border border-card-border bg-background/30 p-6">
+                <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">{item.phase}</p>
+                <h3 className="text-2xl text-foreground mb-3">{item.title}</h3>
+                <p className="mb-5">{item.body}</p>
                 <ul className="space-y-2 text-muted-foreground">
-                  {lane.bullets.map((bullet) => (
+                  {item.bullets.map((bullet) => (
                     <li key={bullet} className="flex gap-3">
                       <span className="mt-1 h-2 w-2 rounded-full bg-primary/80" />
                       <span>{bullet}</span>
@@ -223,7 +219,46 @@ export function RoadmapPage() {
           </div>
         </section>
 
-        
+        <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-2xl border border-card-border bg-background/30 p-6">
+            <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">Roadmap framing</p>
+            <h2 className="text-3xl text-foreground mb-4">Phase 1 to phase 4</h2>
+            <div className="space-y-5">
+              <div>
+                <h3 className="text-xl text-foreground mb-2">Phase 1 — Sharpen the core</h3>
+                <p>Command Center, Prophet, Quest, Launch, Raid, Passport, and Mirror.</p>
+              </div>
+              <div>
+                <h3 className="text-xl text-foreground mb-2">Phase 2 — Make it smarter</h3>
+                <p>Better signals, better calls, better quest diagnosis, and better launch intelligence.</p>
+              </div>
+              <div>
+                <h3 className="text-xl text-foreground mb-2">Phase 3 — Make it strategic</h3>
+                <p>Revival workflows, campaign mode, creator growth planning, and behavior coaching.</p>
+              </div>
+              <div>
+                <h3 className="text-xl text-foreground mb-2">Phase 4 — Make it sticky</h3>
+                <p>Alerts, seasons, reputation, live recommendations, and stronger progression.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-card-border bg-background/30 p-6">
+            <p className="text-sm uppercase tracking-[0.18em] text-primary mb-3">What not to do too early</p>
+            <h2 className="text-3xl text-foreground mb-4">Stay focused</h2>
+            <p className="mb-5">
+              Sloan is strongest when it stays focused on signal, conviction, launch identity, community action, and feedback.
+            </p>
+            <ul className="space-y-2 text-muted-foreground">
+              {guardrails.map((item) => (
+                <li key={item} className="flex gap-3">
+                  <span className="mt-1 h-2 w-2 rounded-full bg-primary/80" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
       </div>
     </StaticContentPage>
   );

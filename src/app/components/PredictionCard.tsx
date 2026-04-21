@@ -24,16 +24,14 @@ function getStatusStyle(status: Prediction['status']) {
 
 function callTypeLabel(callType?: Prediction['callType']) {
   switch (callType) {
-    case 'volume':
-      return 'Volume';
-    case 'holders':
-      return 'Holders';
-    case 'price':
-      return 'Price';
-    case 'survival':
-      return 'Momentum';
-    case 'relative_strength':
-      return 'Relative strength';
+    case 'hold_strength':
+      return 'Hold Strength';
+    case 'outperform':
+      return 'Outperform';
+    case 'graduation':
+      return 'Graduation';
+    case 'breakdown':
+      return 'Breakdown';
     case 'momentum':
     default:
       return 'Momentum';
@@ -47,14 +45,14 @@ function answerLabel(prediction: Prediction) {
 
 function fallbackQuestion(prediction: Prediction) {
   switch (prediction.callType) {
-    case 'volume':
-      return `Will ${prediction.tokenName}'s 24h volume increase over the next ${prediction.timeframe}?`;
-    case 'holders':
-      return `Will ${prediction.tokenName}'s holder count increase over the next ${prediction.timeframe}?`;
-    case 'price':
-      return `Will ${prediction.tokenName}'s price increase over the next ${prediction.timeframe}?`;
-    case 'survival':
-      return `Will ${prediction.tokenName} stay strong over the next ${prediction.timeframe}?`;
+    case 'hold_strength':
+      return `Will ${prediction.tokenName} hold its structure over the next ${prediction.timeframe}?`;
+    case 'outperform':
+      return `Will ${prediction.tokenName} outperform its comparison setup over the next ${prediction.timeframe}?`;
+    case 'graduation':
+      return `Will ${prediction.tokenName} confirm graduation over the next ${prediction.timeframe}?`;
+    case 'breakdown':
+      return `Will ${prediction.tokenName} break down over the next ${prediction.timeframe}?`;
     default:
       return `${prediction.tokenName} prediction`;
   }

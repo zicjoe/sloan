@@ -1,5 +1,4 @@
 import { ArrowRight, Brain, Shield, Target, TrendingUp, Users, Zap } from 'lucide-react';
-import { BrandMark } from '../components/BrandMark';
 import { Link } from 'react-router';
 import type { ReactNode } from 'react';
 import { useAuth } from '../auth/AuthContext';
@@ -62,7 +61,9 @@ export function Landing() {
       <nav className="relative z-10 border-b border-border-subtle bg-background/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <BrandMark size={40} roundedClassName="rounded-lg" />
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary via-secondary to-primary bg-[length:200%_200%] animate-gradient flex items-center justify-center">
+              <Zap className="w-5 h-5 text-primary-foreground" />
+            </div>
             <div>
               <h1 className="text-xl tracking-tight text-foreground">Sloan</h1>
               <p className="text-xs text-muted-foreground font-mono">memecoin intelligence</p>
@@ -93,7 +94,7 @@ export function Landing() {
         <div className="max-w-6xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 text-primary text-sm mb-8 animate-fade-in">
             <Zap className="w-4 h-4" />
-            <span>Built for Four.meme</span>
+            <span>Built for Four.meme AI Sprint</span>
           </div>
 
           <h1 className="text-5xl md:text-6xl lg:text-7xl mb-6 bg-gradient-to-b from-foreground via-foreground to-foreground/60 bg-clip-text text-transparent leading-[1.05] animate-fade-in">
@@ -214,7 +215,9 @@ export function Landing() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-2 mb-4">
-                <BrandMark size={32} roundedClassName="rounded-lg" />
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center">
+                  <Zap className="w-4 h-4 text-primary-foreground" />
+                </div>
                 <span className="text-foreground">Sloan</span>
               </div>
               <p className="text-sm text-muted-foreground">

@@ -568,6 +568,7 @@ function mapPrediction(row: DbPrediction): Prediction {
     baselinePrice: row.baseline_price ?? undefined,
     baselineVolume24h: row.baseline_volume_24h ?? undefined,
     baselineHolders: row.baseline_holders ?? undefined,
+    baselineLiquidity: undefined,
     resolutionNote: row.resolution_note ?? undefined,
     scoreAwarded: row.score_awarded ?? undefined,
     question: row.question ?? undefined,
@@ -805,6 +806,7 @@ interface LocalPredictionMeta {
   baselinePrice?: number;
   baselineVolume24h?: number;
   baselineHolders?: number;
+  baselineLiquidity?: number;
   resolutionNote?: string;
   scoreAwarded?: number;
   question?: string;
@@ -1429,54 +1431,49 @@ function resolvePredictionStatus(prediction: Prediction, tokens: Token[]): Predi
 
   const baselinePrice = prediction.baselinePrice ?? token.price;
   const baselineVolume = prediction.baselineVolume24h ?? Math.max(token.volume24h, 1);
-  const baselineHolders = prediction.baselineHolders ?? Math.max(token.holders, 0);
+  const baselineLiquidity = prediction.baselineLiquidity ?? Math.max(token.liquidity || 0, 1);
   const compareToken = prediction.compareTokenSlug ? tokens.find((item) => item.slug === prediction.compareTokenSlug) : undefined;
 
   const priceDelta = baselinePrice > 0 ? ((token.price - baselinePrice) / baselinePrice) * 100 : token.priceChange24h;
   const volumeDelta = baselineVolume > 0 ? ((token.volume24h - baselineVolume) / baselineVolume) * 100 : 0;
-  const holderDelta = baselineHolders > 0 ? ((token.holders - baselineHolders) / baselineHolders) * 100 : (token.holders > baselineHolders ? 100 : token.holders < baselineHolders ? -100 : 0);
+  const liquidityDelta = baselineLiquidity > 0 ? (((token.liquidity || 0) - baselineLiquidity) / baselineLiquidity) * 100 : 0;
 
   let propositionTrue = false;
   let resolutionNote = '';
   const callType = prediction.callType || 'momentum';
 
-  if (callType === 'relative_strength' && compareToken) {
+  if (callType === 'outperform' && compareToken) {
     const primaryEdge = token.priceChange24h - compareToken.priceChange24h;
-    propositionTrue = primaryEdge > 2;
+    propositionTrue = primaryEdge > 3;
     resolutionNote = propositionTrue
       ? `${token.name} outperformed ${compareToken.name} by ${primaryEdge.toFixed(1)} points on 24h change.`
       : `${token.name} failed to outperform ${compareToken.name}. The edge finished at ${primaryEdge.toFixed(1)} points.`;
-  } else if (callType === 'volume') {
-    propositionTrue = volumeDelta >= 10;
+  } else if (callType === 'hold_strength') {
+    propositionTrue = priceDelta >= 3 && (token.liquidity || 0) >= baselineLiquidity * 0.85;
     resolutionNote = propositionTrue
-      ? `Volume increased by ${volumeDelta.toFixed(1)}% versus baseline.`
-      : `Volume did not expand enough. The move finished at ${volumeDelta.toFixed(1)}% versus baseline.`;
-  } else if (callType === 'holders') {
-    propositionTrue = token.holders > baselineHolders;
+      ? `${token.name} stayed above baseline and kept enough liquidity through the window.`
+      : `${token.name} failed the structure test. Price or liquidity faded too much by expiry.`;
+  } else if (callType === 'graduation') {
+    propositionTrue = Boolean(token.isPancake || token.listedPancake || token.sourceRankLabel?.toLowerCase().includes('graduat'));
     resolutionNote = propositionTrue
-      ? `Holder count increased from ${baselineHolders} to ${token.holders}.`
-      : `Holder count did not increase. It moved from ${baselineHolders} to ${token.holders}.`;
-  } else if (callType === 'price') {
-    propositionTrue = priceDelta >= 5;
+      ? `${token.name} confirmed the next phase and counted as graduated by expiry.`
+      : `${token.name} did not confirm a graduation state before expiry.`;
+  } else if (callType === 'breakdown') {
+    propositionTrue = priceDelta <= -8 || token.momentum === 'falling' || (token.priceChange24h <= -10 && volumeDelta < 5);
     resolutionNote = propositionTrue
-      ? `Price gained ${priceDelta.toFixed(1)}% versus baseline.`
-      : `Price failed to clear the target. The move finished at ${priceDelta.toFixed(1)}%.`;
-  } else if (callType === 'survival') {
-    propositionTrue = token.momentum !== 'falling' && (token.priceChange24h > -8 || token.volume24h >= baselineVolume * 0.9);
-    resolutionNote = propositionTrue
-      ? `${token.name} kept enough activity and momentum to stay strong through the window.`
-      : `${token.name} cooled off too much to count as strong through the window.`;
+      ? `${token.name} broke down far enough for the downside call to land.`
+      : `${token.name} did not unwind enough to confirm the breakdown call.`;
   } else {
-    propositionTrue = priceDelta >= 6 || token.priceChange24h >= 8 || token.momentum === 'rising';
+    propositionTrue = priceDelta >= 8 || (token.priceChange24h >= 10 && (token.volume24h >= baselineVolume * 0.9 || liquidityDelta >= -10));
     resolutionNote = propositionTrue
-      ? `${token.name} held enough follow-through for the bullish call to land.`
-      : `${token.name} never found enough follow-through to validate the bullish call.`;
+      ? `${token.name} found enough follow-through for the momentum call to land.`
+      : `${token.name} never found enough follow-through to validate the momentum call.`;
   }
 
   const votedYes = prediction.binaryAnswer ? prediction.binaryAnswer === 'yes' : prediction.prediction === 'moon';
   const correct = votedYes ? propositionTrue : !propositionTrue;
   const confidenceWeight = prediction.confidence === 'high' ? 1.15 : prediction.confidence === 'low' ? 0.9 : 1;
-  const difficultyBase = callType === 'survival' ? 80 : callType === 'holders' ? 70 : 75;
+  const difficultyBase = callType === 'graduation' ? 84 : callType === 'outperform' ? 82 : callType === 'hold_strength' ? 78 : callType === 'breakdown' ? 76 : 74;
   const scoreAwarded = correct
     ? Math.max(12, Math.round(difficultyBase * confidenceWeight))
     : -Math.max(12, Math.round(difficultyBase * 0.55 * confidenceWeight));
@@ -1564,75 +1561,274 @@ function buildProphetBoard(predictions: Prediction[]) {
   }));
 }
 
+type ProphetTokenState = 'cold' | 'emerging' | 'heating' | 'crowded' | 'fragile' | 'graduating';
+
+function parseLaunchAgeHours(value?: string) {
+  if (!value) return 999;
+  const amount = Number.parseInt(value, 10);
+  if (!Number.isFinite(amount)) return 999;
+  const lower = value.toLowerCase();
+  if (lower.includes('min')) return amount / 60;
+  if (lower.includes('hour')) return amount;
+  if (lower.includes('day')) return amount * 24;
+  return 999;
+}
+
+function classifyProphetTokenState(token: Token): ProphetTokenState {
+  const volume = token.volume24h || 0;
+  const liquidity = token.liquidity || 0;
+  const change = token.priceChange24h || 0;
+  const ageHours = parseLaunchAgeHours(token.launchAge);
+
+  if (token.isPancake || token.listedPancake) return 'graduating';
+  if (change <= -10 || token.momentum === 'falling') return 'fragile';
+  if (volume >= 350000 || liquidity >= 90000) return 'crowded';
+  if (volume >= 120000 && liquidity >= 30000 && change >= 8) return 'heating';
+  if (ageHours <= 36 && volume >= 12000) return 'emerging';
+  if (volume < 12000 && liquidity < 8000) return 'cold';
+  return 'emerging';
+}
+
+function prophetStateSummary(token: Token, state: ProphetTokenState) {
+  switch (state) {
+    case 'graduating':
+      return `${token.name} has already crossed into a more mature trading phase, so Sloan treats the setup like a graduation read instead of a generic price guess.`;
+    case 'crowded':
+      return `${token.name} already has enough traffic and liquidity that the cleaner question is whether it can still outperform, not whether anyone notices it.`;
+    case 'heating':
+      return `${token.name} has enough real activity behind it that Sloan can frame a structure call instead of a random up-or-down guess.`;
+    case 'fragile':
+      return `${token.name} looks unstable right now, so Sloan leans into downside or failure-risk calls instead of forcing a bullish template.`;
+    case 'cold':
+      return `${token.name} is still too quiet for complex call design, so Sloan keeps the opportunity simple and momentum-based.`;
+    case 'emerging':
+    default:
+      return `${token.name} is early enough that the useful question is whether attention can turn into follow-through before the crowd fully arrives.`;
+  }
+}
+
+function selectComparisonToken(token: Token, tokens: Token[]) {
+  const pool = tokens
+    .filter((candidate) => candidate.slug !== token.slug && Boolean(candidate.slug))
+    .sort((a, b) => ((b.volume24h || 0) + (b.liquidity || 0)) - ((a.volume24h || 0) + (a.liquidity || 0)));
+  return pool.find((candidate) => candidate.category === token.category) || pool[0];
+}
+
+function pushOpportunity(opportunities: PredictionOpportunity[], token: Token, partial: Omit<PredictionOpportunity, 'id' | 'tokenSlug'>) {
+  opportunities.push({
+    id: `opp-${partial.callType}-${token.slug}-${opportunities.length}`,
+    tokenSlug: token.slug,
+    ...partial,
+  });
+}
+
 function buildPredictionOpportunities(tokens: Token[]): PredictionOpportunity[] {
   const live = [...tokens]
     .filter((token) => token.slug && token.name)
-    .sort((a, b) => (b.volume24h - a.volume24h) || (b.holders - a.holders));
+    .sort((a, b) => ((b.volume24h || 0) + (b.liquidity || 0)) - ((a.volume24h || 0) + (a.liquidity || 0)));
 
   const opportunities: PredictionOpportunity[] = [];
-  const top = live.slice(0, 12);
+  const top = live.slice(0, 8);
 
-  top.forEach((token, index) => {
-    const variant = index % 4;
-    if (variant === 0) {
-      opportunities.push({
-        id: `opp-volume-${token.slug}`,
-        title: `${token.name} • volume call`,
-        subtitle: `${token.ticker} is trading ${formatUsd(token.volume24h)} in 24h volume right now.`,
-        tokenSlug: token.slug,
-        callType: 'volume',
-        suggestedPrediction: 'moon',
-        timeframe: '24 hours',
-        confidence: token.momentum === 'rising' ? 'medium' : 'low',
-        reasoningHint: `${token.name} already has live activity. Sloan thinks the next clean question is whether that volume expands from here.`,
-        question: `Will ${token.name}'s 24h volume increase over the next 24 hours?`,
-        yesLabel: 'Yes',
-        noLabel: 'No',
-      });
-    } else if (variant === 1) {
-      opportunities.push({
-        id: `opp-holders-${token.slug}`,
-        title: `${token.name} • holder growth call`,
-        subtitle: `${token.holders || 0} holders are currently tracked for ${token.ticker}.`,
-        tokenSlug: token.slug,
-        callType: 'holders',
+  top.forEach((token) => {
+    const state = classifyProphetTokenState(token);
+    const stateSummary = prophetStateSummary(token, state);
+    const priceMove = formatPercent(token.priceChange24h, { showPlus: true });
+    const volumeText = formatUsd(token.volume24h || 0);
+    const liquidityText = formatUsd(token.liquidity || 0);
+    const compare = selectComparisonToken(token, live);
+
+    if (state === 'graduating') {
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • graduation call`,
+        subtitle: `${token.ticker} is already behaving like a post-launch runner. Sloan wants a graduation read, not a generic price guess.`,
+        callType: 'graduation',
         suggestedPrediction: 'moon',
         timeframe: '24 hours',
         confidence: 'medium',
-        reasoningHint: `${token.name} has enough visibility for a clean holder-growth yes or no call.`,
-        question: `Will ${token.name}'s holder count increase over the next 24 hours?`,
+        reasoningHint: stateSummary,
+        whyNow: `The token already has enough live structure that the more meaningful question is whether it fully confirms its next phase.`,
+        resolutionRule: `Resolves YES if ${token.name} is still marked as graduated or Pancake-traded by expiry.`,
+        question: `Will ${token.name} confirm its graduation phase over the next 24 hours?`,
         yesLabel: 'Yes',
         noLabel: 'No',
+        tokenState: state,
       });
-    } else if (variant === 2) {
-      opportunities.push({
-        id: `opp-price-${token.slug}`,
-        title: `${token.name} • price call`,
-        subtitle: `${token.ticker} is moving ${formatPercent(token.priceChange24h, { showPlus: true })} over 24h.`,
-        tokenSlug: token.slug,
-        callType: 'price',
-        suggestedPrediction: 'moon',
+      if (compare) {
+        pushOpportunity(opportunities, token, {
+          title: `${token.name} • outperform call`,
+          subtitle: `${token.ticker} already has mature liquidity. Sloan is testing whether it can outperform ${compare.name}.`,
+          compareTokenSlug: compare.slug,
+          callType: 'outperform',
+          suggestedPrediction: 'moon',
+          timeframe: '24 hours',
+          confidence: 'high',
+          reasoningHint: `${stateSummary} The sharper question now is relative strength against another active name, not raw direction in isolation.`,
+          whyNow: `This token already has enough activity that relative strength is a cleaner read than a plain bullish guess.`,
+          resolutionRule: `Resolves YES if ${token.name}'s return beats ${compare.name}'s return by more than 3 points over the window.`,
+          question: `Will ${token.name} outperform ${compare.name} over the next 24 hours?`,
+          yesLabel: 'Yes',
+          noLabel: 'No',
+          tokenState: state,
+        });
+      }
+      return;
+    }
+
+    if (state === 'fragile') {
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • breakdown call`,
+        subtitle: `${token.ticker} already looks unstable. Sloan is framing the risk of a deeper unwind.`,
+        callType: 'breakdown',
+        suggestedPrediction: 'dump',
         timeframe: '24 hours',
-        confidence: token.momentum === 'rising' ? 'medium' : 'low',
-        reasoningHint: `${token.name} has enough price motion for a simple up-or-not call.`,
-        question: `Will ${token.name}'s price increase over the next 24 hours?`,
+        confidence: 'medium',
+        reasoningHint: stateSummary,
+        whyNow: `When the live state is already weak, the useful call is whether the breakdown completes instead of pretending the setup is clean.`,
+        resolutionRule: `Resolves YES if ${token.name} closes at least 8% below its baseline or clearly loses momentum by expiry.`,
+        question: `Will ${token.name} break down further over the next 24 hours?`,
         yesLabel: 'Yes',
         noLabel: 'No',
+        tokenState: state,
       });
-    } else {
-      opportunities.push({
-        id: `opp-survival-${token.slug}`,
-        title: `${token.name} • momentum call`,
-        subtitle: `${token.ticker} currently reads ${token.momentum} on Sloan's board.`,
-        tokenSlug: token.slug,
-        callType: 'survival',
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • hold strength call`,
+        subtitle: `${token.ticker} needs to prove it can hold structure from here, not just spike once.`,
+        callType: 'hold_strength',
         suggestedPrediction: 'moon',
         timeframe: '24 hours',
         confidence: 'low',
-        reasoningHint: `${token.name} has enough signal for a simple yes-or-no call on whether it stays strong.`,
-        question: `Will ${token.name} stay strong over the next 24 hours?`,
+        reasoningHint: `${stateSummary} Sloan keeps a second structure call here because the real edge is deciding whether the setup recovers or fails.`,
+        whyNow: `This call exists because the token is fragile enough that survival itself becomes the main test.`,
+        resolutionRule: `Resolves YES if ${token.name} stays above baseline and keeps enough liquidity through expiry.`,
+        question: `Will ${token.name} hold its structure over the next 24 hours?`,
         yesLabel: 'Yes',
         noLabel: 'No',
+        tokenState: state,
+      });
+      return;
+    }
+
+    if (state === 'crowded') {
+      if (compare) {
+        pushOpportunity(opportunities, token, {
+          title: `${token.name} • outperform call`,
+          subtitle: `${token.ticker} already has crowded attention. Sloan wants to know if it can still beat ${compare.name}.`,
+          compareTokenSlug: compare.slug,
+          callType: 'outperform',
+          suggestedPrediction: 'moon',
+          timeframe: '24 hours',
+          confidence: 'high',
+          reasoningHint: stateSummary,
+          whyNow: `When attention is already crowded, the cleaner read is whether this token is still the stronger trade.`,
+          resolutionRule: `Resolves YES if ${token.name}'s return beats ${compare.name} by more than 3 points.`,
+          question: `Will ${token.name} outperform ${compare.name} over the next 24 hours?`,
+          yesLabel: 'Yes',
+          noLabel: 'No',
+          tokenState: state,
+        });
+      }
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • hold strength call`,
+        subtitle: `${token.ticker} is trading ${volumeText} with ${liquidityText} liquidity. Sloan is checking if the move can still hold.`,
+        callType: 'hold_strength',
+        suggestedPrediction: 'moon',
+        timeframe: '24 hours',
+        confidence: 'medium',
+        reasoningHint: `${stateSummary} The next meaningful question is whether the tape can stay strong after attention is already crowded.`,
+        whyNow: `This is a structure test, not a hype test. The token already has attention.`,
+        resolutionRule: `Resolves YES if ${token.name} stays above baseline and keeps at least 85% of baseline liquidity.`,
+        question: `Will ${token.name} hold strength through the next 24 hours?`,
+        yesLabel: 'Yes',
+        noLabel: 'No',
+        tokenState: state,
+      });
+      return;
+    }
+
+    if (state === 'heating') {
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • momentum call`,
+        subtitle: `${token.ticker} is up ${priceMove} with ${volumeText} in volume. Sloan reads it as a live momentum setup.`,
+        callType: 'momentum',
+        suggestedPrediction: 'moon',
+        timeframe: '24 hours',
+        confidence: 'medium',
+        reasoningHint: stateSummary,
+        whyNow: `The setup already has enough motion that the next clean question is follow-through.`,
+        resolutionRule: `Resolves YES if ${token.name} finishes at least 8% above baseline by expiry.`,
+        question: `Will ${token.name} extend its current momentum over the next 24 hours?`,
+        yesLabel: 'Yes',
+        noLabel: 'No',
+        tokenState: state,
+      });
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • hold strength call`,
+        subtitle: `${token.ticker} has real flow behind it, but Sloan wants to know if the strength is durable.`,
+        callType: 'hold_strength',
+        suggestedPrediction: 'moon',
+        timeframe: '24 hours',
+        confidence: 'medium',
+        reasoningHint: `${stateSummary} Sloan adds a structure test here because not every hot token can keep its footing.`,
+        whyNow: `This call exists because the token has enough activity to test durability, not just direction.`,
+        resolutionRule: `Resolves YES if ${token.name} stays above baseline and keeps enough liquidity through expiry.`,
+        question: `Will ${token.name} hold its strength over the next 24 hours?`,
+        yesLabel: 'Yes',
+        noLabel: 'No',
+        tokenState: state,
+      });
+      return;
+    }
+
+    if (state === 'cold') {
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • momentum call`,
+        subtitle: `${token.ticker} is still quiet, so Sloan keeps the read simple and asks whether momentum wakes up at all.`,
+        callType: 'momentum',
+        suggestedPrediction: 'moon',
+        timeframe: '24 hours',
+        confidence: 'low',
+        reasoningHint: stateSummary,
+        whyNow: `The token is too early or too quiet for complex calls, so Sloan sticks to a simple momentum test.`,
+        resolutionRule: `Resolves YES if ${token.name} finishes at least 8% above baseline by expiry.`,
+        question: `Will ${token.name} wake up over the next 24 hours?`,
+        yesLabel: 'Yes',
+        noLabel: 'No',
+        tokenState: state,
+      });
+      return;
+    }
+
+    pushOpportunity(opportunities, token, {
+      title: `${token.name} • momentum call`,
+      subtitle: `${token.ticker} is emerging with ${volumeText} in volume. Sloan wants to see if the setup keeps expanding.`,
+      callType: 'momentum',
+      suggestedPrediction: 'moon',
+      timeframe: '24 hours',
+      confidence: 'medium',
+      reasoningHint: stateSummary,
+      whyNow: `This token is early enough that the clean question is follow-through before attention gets crowded.`,
+      resolutionRule: `Resolves YES if ${token.name} finishes at least 8% above baseline by expiry.`,
+      question: `Will ${token.name} build from here over the next 24 hours?`,
+      yesLabel: 'Yes',
+      noLabel: 'No',
+      tokenState: state,
+    });
+    if ((token.isPancake || token.listedPancake) === false && (token.volume24h || 0) >= 25000) {
+      pushOpportunity(opportunities, token, {
+        title: `${token.name} • graduation call`,
+        subtitle: `${token.ticker} already has enough live activity that Sloan can frame a graduation question.`,
+        callType: 'graduation',
+        suggestedPrediction: 'moon',
+        timeframe: '24 hours',
+        confidence: 'low',
+        reasoningHint: `${stateSummary} The token has enough motion that the next milestone is whether it confirms the next stage.`,
+        whyNow: `This call only appears because the token has enough live activity to justify an event-based read.`,
+        resolutionRule: `Resolves YES if ${token.name} confirms a graduated or Pancake-traded state by expiry.`,
+        question: `Will ${token.name} reach graduation over the next 24 hours?`,
+        yesLabel: 'Yes',
+        noLabel: 'No',
+        tokenState: state,
       });
     }
   });
@@ -1645,9 +1841,9 @@ function buildSyntheticPredictions(tokens: Token[]): Prediction[] {
   if (live.length === 0) return [];
 
   const picks = [
-    { username: 'signal_saint', callType: 'momentum' as PredictionCallType, prediction: 'moon' as const, timeframe: '1 hour', confidence: 'medium' as PredictionConfidence, offsetHours: 4, reasoning: 'The board still has headroom and the setup is not fully exhausted yet.' },
-    { username: 'volume_oracle', callType: 'volume' as PredictionCallType, prediction: 'sideways' as const, timeframe: '6 hours', confidence: 'medium' as PredictionConfidence, offsetHours: 12, reasoning: 'Volume looks active, but not explosive enough to keep expanding all day.' },
-    { username: 'narrative_monk', callType: 'survival' as PredictionCallType, prediction: 'moon' as const, timeframe: '24 hours', confidence: 'low' as PredictionConfidence, offsetHours: 30, reasoning: 'This token still has enough story surface to stay alive after the next cycle.' },
+    { username: 'signal_saint', callType: 'momentum' as PredictionCallType, prediction: 'moon' as const, timeframe: '24 hours', confidence: 'medium' as PredictionConfidence, offsetHours: 8, reasoning: 'Sloan read the setup as early momentum with enough live activity for a clean follow-through call.' },
+    { username: 'structure_oracle', callType: 'hold_strength' as PredictionCallType, prediction: 'moon' as const, timeframe: '24 hours', confidence: 'medium' as PredictionConfidence, offsetHours: 12, reasoning: 'This was a structure call, not a hype call. The read was about whether strength could actually hold.' },
+    { username: 'fade_hunter', callType: 'breakdown' as PredictionCallType, prediction: 'dump' as const, timeframe: '24 hours', confidence: 'low' as PredictionConfidence, offsetHours: 30, reasoning: 'The token already looked fragile, so Sloan framed the call around failure risk instead of a random bullish guess.' },
   ];
 
   const output: Prediction[] = [];
@@ -1670,9 +1866,10 @@ function buildSyntheticPredictions(tokens: Token[]): Prediction[] {
       callType: seed.callType,
       confidence: seed.confidence,
       expiresAt: buildPredictionExpiry(timestamp, seed.timeframe),
-      baselinePrice: token.price * (seed.prediction === 'moon' ? 0.94 : seed.prediction === 'dump' ? 1.08 : 1),
-      baselineVolume24h: Math.max(1, token.volume24h * (seed.callType === 'volume' ? (seed.prediction === 'moon' ? 0.72 : seed.prediction === 'dump' ? 1.28 : 1.02) : 1)),
+      baselinePrice: token.price,
+      baselineVolume24h: Math.max(1, token.volume24h),
       baselineHolders: Math.max(0, Math.round(token.holders * 0.96)),
+      baselineLiquidity: token.liquidity,
     });
   }
 
@@ -1681,7 +1878,7 @@ function buildSyntheticPredictions(tokens: Token[]): Prediction[] {
     const compare = live[1];
     const timestamp = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString();
     output.push({
-      id: `seed-relative-${primary.slug}-${compare.slug}`,
+      id: `seed-outperform-${primary.slug}-${compare.slug}`,
       userId: 'edge_archivist',
       username: 'edge_archivist',
       tokenSlug: primary.slug,
@@ -1690,22 +1887,22 @@ function buildSyntheticPredictions(tokens: Token[]): Prediction[] {
       compareTokenName: compare.name,
       prediction: 'moon',
       timeframe: '24 hours',
-      reasoning: 'The primary token has the stronger combination of narrative and holder traction right now.',
+      reasoning: 'Sloan treated this as a relative strength setup because both names were active enough for a fair comparison.',
       timestamp,
       likes: 0,
       status: 'pending',
-      callType: 'relative_strength',
+      callType: 'outperform',
       confidence: 'high',
       expiresAt: buildPredictionExpiry(timestamp, '24 hours'),
       baselinePrice: primary.price,
       baselineVolume24h: primary.volume24h,
       baselineHolders: primary.holders,
+      baselineLiquidity: primary.liquidity,
     });
   }
 
   return output;
 }
-
 
 function extractQuotedPhrases(concept: string) {
   return [...concept.matchAll(/["“”']([^"“”']{2,40})["“”']/g)]
@@ -2919,6 +3116,7 @@ export const predictionApi = {
       baselinePrice: token?.price,
       baselineVolume24h: token?.volume24h,
       baselineHolders: token?.holders,
+      baselineLiquidity: token?.liquidity,
       question: (payload as any).question,
       binaryAnswer: (payload as any).binaryAnswer,
     };

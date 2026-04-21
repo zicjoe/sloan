@@ -1,6 +1,7 @@
-import { TrendingUp, TrendingDown, AlertTriangle, Zap, Shield, Bot, Twitter, Droplet } from 'lucide-react';
+import { AlertTriangle, Bot, Droplet, Shield, TrendingDown, TrendingUp, Twitter, Zap } from 'lucide-react';
+import type { PredictionOpportunity } from '../types';
+import { formatNumber, formatPrice } from '../lib/utils';
 import { MakeCallComposer } from './MakeCallComposer';
-import { formatPrice, formatNumber } from '../lib/utils';
 
 interface FocusedTokenPanelProps {
   token: {
@@ -13,7 +14,7 @@ interface FocusedTokenPanelProps {
     priceChange24h: number;
     volume24h?: number;
     marketCap?: number;
-    holders?: number;
+    liquidity?: number;
     category?: string;
     launchAge?: string;
     isAICreated?: boolean;
@@ -26,174 +27,107 @@ interface FocusedTokenPanelProps {
     reasonLine?: string;
     actionBias?: 'bullish' | 'bearish' | 'neutral';
   };
-  onSubmitCall?: (call: {
-    answer: 'yes' | 'no';
-    confidence: number;
-    expiry: string;
-    reason?: string;
-  }) => void;
+  opportunity?: PredictionOpportunity;
+  onSubmitCall?: (call: { answer: 'yes' | 'no'; expiry: string; reason?: string }) => void;
 }
 
-export function FocusedTokenPanel({ token, onSubmitCall }: FocusedTokenPanelProps) {
-  const getStatusBadge = () => {
-    if (token.launchAge && token.launchAge.includes('min')) return { label: 'Early', color: 'success' };
-    if (token.launchAge && (token.launchAge.includes('hour') || token.launchAge.includes('day'))) {
-      const hours = token.launchAge.includes('hour') ? parseInt(token.launchAge) : parseInt(token.launchAge) * 24;
-      if (hours < 48) return { label: 'Early', color: 'success' };
-    }
-    if (token.volume24h && token.volume24h > 5000000) return { label: 'Liquid', color: 'primary' };
-    if (token.priceChange24h > 50) return { label: 'Hot', color: 'warning' };
-    if (token.isPancake) return { label: 'Graduated', color: 'secondary' };
-    if (token.isTaxToken) return { label: 'Risk', color: 'destructive' };
-    return null;
-  };
+function statusLabel(token: FocusedTokenPanelProps['token']) {
+  if (token.isPancake) return 'Graduated';
+  if ((token.liquidity || 0) > 90000) return 'Liquid';
+  if (token.priceChange24h > 25) return 'Hot';
+  if (token.launchAge?.includes('min') || token.launchAge?.includes('hour')) return 'Early';
+  if (token.isTaxToken) return 'Risk';
+  return undefined;
+}
 
-  const statusBadge = getStatusBadge();
+function callTypeLabel(callType?: PredictionOpportunity['callType']) {
+  switch (callType) {
+    case 'hold_strength':
+      return 'Hold Strength';
+    case 'outperform':
+      return 'Outperform';
+    case 'graduation':
+      return 'Graduation';
+    case 'breakdown':
+      return 'Breakdown';
+    case 'momentum':
+    default:
+      return 'Momentum';
+  }
+}
 
+export function FocusedTokenPanel({ token, opportunity, onSubmitCall }: FocusedTokenPanelProps) {
   const mechanicBadges = [
     token.isAICreated && { icon: Bot, label: 'AI Created', color: 'purple' },
     token.isXMode && { icon: Twitter, label: 'X Mode', color: 'blue' },
     token.isAntiSniper && { icon: Shield, label: 'Anti-Sniper', color: 'green' },
     token.isTaxToken && { icon: AlertTriangle, label: `Tax ${token.taxRate}%`, color: 'red' },
     token.isPancake && { icon: Droplet, label: 'Pancake', color: 'purple' },
-  ].filter(Boolean);
+  ].filter(Boolean) as Array<{ icon: any; label: string; color: string }>;
+  const status = statusLabel(token);
 
   return (
     <div className="relative overflow-hidden rounded-xl border border-primary/30 bg-gradient-to-br from-card via-background-elevated to-card shadow-[0_0_30px_rgba(74,222,255,0.15)]">
-      {/* Glow effect */}
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-primary/5 pointer-events-none" />
-
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-primary/5" />
       <div className="relative p-8">
-        {/* Header indicator */}
-        <div className="flex items-center gap-2 mb-6">
-          <Zap className="w-4 h-4 text-primary" />
-          <span className="text-sm text-primary font-medium">Make Your Call</span>
+        <div className="mb-6 flex items-center gap-2">
+          <Zap className="h-4 w-4 text-primary" />
+          <span className="text-sm font-medium text-primary">AI-Prepared Call Setup</span>
         </div>
 
-        <div className="grid lg:grid-cols-[1fr,400px] gap-8">
-          {/* Token Information */}
+        <div className="grid gap-8 lg:grid-cols-[1fr,400px]">
           <div>
-            {/* Token Identity */}
-            <div className="flex items-start gap-4 mb-6">
-              <img
-                src={token.image || 'https://placehold.co/96x96/111827/94a3b8?text=%24'}
-                alt={token.name}
-                className="w-16 h-16 rounded-full ring-2 ring-primary/20"
-              />
+            <div className="mb-6 flex items-start gap-4">
+              <img src={token.image || 'https://placehold.co/96x96/111827/94a3b8?text=%24'} alt={token.name} className="h-16 w-16 rounded-full ring-2 ring-primary/20" />
               <div className="flex-1">
-                <div className="flex items-center gap-3 mb-2">
+                <div className="mb-2 flex items-center gap-3">
                   <h2 className="text-2xl font-bold text-foreground">{token.name}</h2>
                   <span className="text-lg text-muted-foreground">${token.ticker}</span>
-                  {statusBadge && (
-                    <span
-                      className={`
-                        px-2 py-1 rounded text-xs font-medium
-                        ${statusBadge.color === 'success' ? 'bg-success/10 text-success border border-success/20' : ''}
-                        ${statusBadge.color === 'primary' ? 'bg-primary/10 text-primary border border-primary/20' : ''}
-                        ${statusBadge.color === 'warning' ? 'bg-warning/10 text-warning border border-warning/20' : ''}
-                        ${statusBadge.color === 'secondary' ? 'bg-secondary/10 text-secondary border border-secondary/20' : ''}
-                        ${statusBadge.color === 'destructive' ? 'bg-destructive/10 text-destructive border border-destructive/20' : ''}
-                      `}
-                    >
-                      {statusBadge.label}
-                    </span>
-                  )}
-                  {token.category && (
-                    <span className="px-2 py-1 rounded text-xs font-medium bg-muted/50 text-muted-foreground border border-border">
-                      {token.category}
-                    </span>
-                  )}
+                  {status ? <span className="rounded border border-primary/20 bg-primary/10 px-2 py-1 text-xs font-medium text-primary">{status}</span> : null}
+                  {token.category ? <span className="rounded border border-border bg-muted/50 px-2 py-1 text-xs font-medium text-muted-foreground">{token.category}</span> : null}
                 </div>
-
-                {/* Mechanic Badges */}
-                {mechanicBadges.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {mechanicBadges.map((badge: any, index) => {
+                {mechanicBadges.length > 0 ? (
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {mechanicBadges.map((badge, index) => {
                       const Icon = badge.icon;
                       return (
-                        <span
-                          key={index}
-                          className={`
-                            inline-flex items-center gap-1 px-2 py-1 rounded text-xs border
-                            ${badge.color === 'purple' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : ''}
-                            ${badge.color === 'blue' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : ''}
-                            ${badge.color === 'green' ? 'bg-green-500/10 text-green-400 border-green-500/20' : ''}
-                            ${badge.color === 'red' ? 'bg-red-500/10 text-red-400 border-red-500/20' : ''}
-                          `}
-                        >
-                          <Icon className="w-3 h-3" />
+                        <span key={index} className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs ${badge.color === 'purple' ? 'border-purple-500/20 bg-purple-500/10 text-purple-400' : ''}${badge.color === 'blue' ? ' border-blue-500/20 bg-blue-500/10 text-blue-400' : ''}${badge.color === 'green' ? ' border-green-500/20 bg-green-500/10 text-green-400' : ''}${badge.color === 'red' ? ' border-red-500/20 bg-red-500/10 text-red-400' : ''}`}>
+                          <Icon className="h-3 w-3" />
                           {badge.label}
                         </span>
                       );
                     })}
                   </div>
-                )}
-
-                {/* Price and Stats */}
+                ) : null}
                 <div className="flex items-baseline gap-4">
-                  <div className="text-3xl font-bold font-mono text-foreground">
-                    {formatPrice(token.price)}
-                  </div>
-                  <div className={`flex items-center gap-1 text-lg font-medium ${
-                    token.priceChange24h >= 0 ? 'text-success' : 'text-destructive'
-                  }`}>
-                    {token.priceChange24h >= 0 ? (
-                      <TrendingUp className="w-5 h-5" />
-                    ) : (
-                      <TrendingDown className="w-5 h-5" />
-                    )}
+                  <div className="font-mono text-3xl font-bold text-foreground">{formatPrice(token.price)}</div>
+                  <div className={`flex items-center gap-1 text-lg font-medium ${token.priceChange24h >= 0 ? 'text-success' : 'text-destructive'}`}>
+                    {token.priceChange24h >= 0 ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
                     {token.priceChange24h >= 0 ? '+' : ''}{token.priceChange24h.toFixed(2)}%
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-3 gap-4 mb-6">
-              {token.volume24h !== undefined && (
-                <div className="p-3 rounded-lg bg-muted/30 border border-border">
-                  <div className="text-xs text-muted-foreground mb-1">24h Volume</div>
-                  <div className="text-sm font-mono text-foreground">{formatNumber(token.volume24h)}</div>
-                </div>
-              )}
-              {token.marketCap !== undefined && (
-                <div className="p-3 rounded-lg bg-muted/30 border border-border">
-                  <div className="text-xs text-muted-foreground mb-1">Market Cap</div>
-                  <div className="text-sm font-mono text-foreground">{formatNumber(token.marketCap)}</div>
-                </div>
-              )}
-              {token.holders !== undefined && (
-                <div className="p-3 rounded-lg bg-muted/30 border border-border">
-                  <div className="text-xs text-muted-foreground mb-1">Holders</div>
-                  <div className="text-sm font-mono text-foreground">{formatNumber(token.holders)}</div>
-                </div>
-              )}
+            <div className="mb-6 grid grid-cols-3 gap-4">
+              {typeof token.volume24h === 'number' ? <div className="rounded-lg border border-border bg-muted/30 p-3"><div className="mb-1 text-xs text-muted-foreground">24h Volume</div><div className="text-sm font-mono text-foreground">{formatNumber(token.volume24h)}</div></div> : null}
+              {typeof token.marketCap === 'number' ? <div className="rounded-lg border border-border bg-muted/30 p-3"><div className="mb-1 text-xs text-muted-foreground">Market Cap</div><div className="text-sm font-mono text-foreground">{formatNumber(token.marketCap)}</div></div> : null}
+              {typeof token.liquidity === 'number' ? <div className="rounded-lg border border-border bg-muted/30 p-3"><div className="mb-1 text-xs text-muted-foreground">Liquidity</div><div className="text-sm font-mono text-foreground">{formatNumber(token.liquidity)}</div></div> : null}
             </div>
 
-            {/* Signal Intelligence */}
-            <div className="space-y-3">
-              {token.signalSummary && (
-                <div className="p-4 rounded-lg bg-primary/5 border border-primary/20">
-                  <div className="text-xs text-primary font-medium mb-1">AI Signal</div>
-                  <p className="text-sm text-foreground leading-relaxed">{token.signalSummary}</p>
+            {opportunity ? (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+                  <div className="mb-1 text-xs font-medium text-primary">AI Selected Call • {callTypeLabel(opportunity.callType)}</div>
+                  <p className="text-sm leading-relaxed text-foreground">{opportunity.reasoningHint}</p>
                 </div>
-              )}
-              {token.reasonLine && (
-                <div className="p-4 rounded-lg bg-muted/30 border border-border">
-                  <div className="text-xs text-muted-foreground font-medium mb-1">Context</div>
-                  <p className="text-sm text-foreground leading-relaxed">{token.reasonLine}</p>
-                </div>
-              )}
-            </div>
+                {opportunity.whyNow ? <div className="rounded-lg border border-border bg-muted/30 p-4"><div className="mb-1 text-xs font-medium text-muted-foreground">Why this call fits now</div><p className="text-sm leading-relaxed text-foreground">{opportunity.whyNow}</p></div> : null}
+              </div>
+            ) : null}
           </div>
 
-          {/* Make Call Composer */}
           <div className="lg:border-l lg:border-border lg:pl-8">
-            <MakeCallComposer
-              tokenSlug={token.slug}
-              tokenName={token.name}
-              onSubmit={onSubmitCall}
-            />
+            <MakeCallComposer tokenSlug={token.slug} tokenName={token.name} opportunity={opportunity} onSubmit={onSubmitCall} />
           </div>
         </div>
       </div>

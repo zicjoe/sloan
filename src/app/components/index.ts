@@ -32,5 +32,3 @@ export { OpportunityCard } from './OpportunityCard';
 export { ActiveCallCard } from './ActiveCallCard';
 export { ResolvedCallCard } from './ResolvedCallCard';
 export { LeaderboardPanel } from './LeaderboardPanel';
-
-export * from './BrandMark';
