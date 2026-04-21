@@ -110,6 +110,8 @@ function sanitizeRaids(campaigns: RaidCampaign[]) {
   return campaigns.filter((campaign) => !isDemoTokenSlug(campaign.tokenSlug));
 }
 
+const allowMockData = env.useMockApi;
+
 
 function estimateCounterfactualDelta(token: Token, direction: 'upside' | 'drawdown' = 'upside') {
   const basis = Math.max(
@@ -774,14 +776,18 @@ function mapSyncRun(row: DbSyncRun) {
 }
 
 async function getJson<T>(path: string, fallback: T): Promise<T> {
-  if (!hasApiBaseBackend) return fallback;
+  if (!hasApiBaseBackend) {
+    if (allowMockData) return fallback;
+    throw new Error(`API backend is not configured for ${path}`);
+  }
 
   try {
     const response = await fetch(`${env.apiBaseUrl}${path}`);
     if (!response.ok) throw new Error(`Request failed: ${response.status}`);
     return (await response.json()) as T;
-  } catch {
-    return fallback;
+  } catch (error) {
+    if (allowMockData) return fallback;
+    throw error;
   }
 }
 
@@ -834,7 +840,8 @@ function persistPrediction(prediction: Prediction) {
 }
 
 function getPredictionPool() {
-  return sanitizePredictions([...getStoredPredictions(), ...mockPredictions]).map(mergePredictionMeta);
+  const pool = allowMockData ? [...getStoredPredictions(), ...mockPredictions] : getStoredPredictions();
+  return sanitizePredictions(pool).map(mergePredictionMeta);
 }
 
 interface LocalQuestJoin {
@@ -1093,8 +1100,8 @@ function slugifyQuestValue(value: string) {
 }
 
 function buildOwnerQuestSuggestions(token: Token, preferredCategory?: Quest['category']): QuestSuggestionPack {
-  const categories: Quest['category'][] = preferredCategory ? [preferredCategory] : ['posting', 'prediction', 'meme', 'rivalry'];
-  const chosen = categories.length === 1 ? categories : ['posting', 'prediction', 'meme', 'rivalry'];
+  const categories: Quest['category'][] = preferredCategory ? [preferredCategory] : ['posting', 'prediction', 'meme'];
+  const chosen = categories.length === 1 ? categories : ['posting', 'prediction', 'meme'];
   const volumeLine = token.volume24h > 0 ? `$${Math.round(token.volume24h).toLocaleString()} 24h volume` : 'live attention starting to form';
   const holderLine = token.holders > 0 ? `${token.holders.toLocaleString()} holders` : 'holder expansion still early';
   const rivalSlug = token.sourceRankLabel === 'HOT' ? 'the usual weak copycat launches' : 'the louder timeline tourists';
@@ -1218,7 +1225,7 @@ async function getQuestBaseQuests(tokens: Token[] = []) {
 
   const localOwnerQuests = sanitizeQuests(readStorage(STORAGE_KEYS.quests, [] as Quest[]));
   if (localOwnerQuests.length > 0) return uniqueQuests(localOwnerQuests);
-  const fallbackQuests = sanitizeQuests(mockQuests);
+  const fallbackQuests = allowMockData ? sanitizeQuests(mockQuests) : [];
   return dynamicQuests.length > 0 ? uniqueQuests([...dynamicQuests, ...fallbackQuests]) : fallbackQuests;
 }
 
@@ -1379,28 +1386,6 @@ function titleCase(value: string) {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ');
-}
-
-function compactTickerFromPhrase(value: string) {
-  const words = value
-    .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-
-  if (words.length === 0) return '$SLON';
-
-  const joinedDigits = words.join(' ').match(/\b\d+[a-zA-Z]*\b/g)?.join('') ?? '';
-  if (joinedDigits) {
-    const letters = words.map((word) => word.replace(/[^a-zA-Z]/g, '')).filter(Boolean);
-    const seed = `${joinedDigits}${letters.map((word) => word[0]).join('')}`.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    return `$${seed.slice(0, 6)}`;
-  }
-
-  const acronym = words.map((word) => word[0]).join('').toUpperCase();
-  if (acronym.length >= 2) return `$${acronym.slice(0, 6)}`;
-
-  const cleaned = words.join('').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-  return `$${cleaned.slice(0, 6) || 'SLON'}`;
 }
 
 function uniqueStrings(values: string[], limit?: number) {
@@ -1721,6 +1706,7 @@ function buildSyntheticPredictions(tokens: Token[]): Prediction[] {
   return output;
 }
 
+
 function extractQuotedPhrases(concept: string) {
   return [...concept.matchAll(/["“”']([^"“”']{2,40})["“”']/g)]
     .map((match) => titleCase(match[1].trim()))
@@ -1736,178 +1722,534 @@ function extractAnchorWords(concept: string) {
       .filter((word) => word.length > 2)
       .filter((word) => !STOP_WORDS.has(word.toLowerCase()))
       .map((word) => titleCase(word)),
-    14,
+    18,
   );
 }
 
-function extractConceptAnchors(input: ForgeInput) {
+type ForgeArchetype = 'cult' | 'ai_irony' | 'mascot_war' | 'builder_underdog' | 'anti_copycat' | 'terminal_absurdism' | 'schizo_finance';
+
+interface ForgeLexicon {
+  archetype: ForgeArchetype;
+  posture: string;
+  strongWords: string[];
+  strongPhrases: string[];
+  enemyLine: string;
+  chantSeed: string;
+  visualSeed: string;
+}
+
+const FORGE_BANNED_NAME_WORDS = new Set([
+  ...GENERIC_FORGE_WORDS,
+  'protocol', 'signal', 'reactor', 'club', 'mode', 'dao', 'labs', 'network', 'platform',
+  'coin', 'token', 'alpha', 'beta', 'future', 'legend', 'launch', 'project', 'community',
+  'memegpt', 'tokenbot', 'cryptomind', 'playful', 'viral', 'powered', 'intelligence', 'utility',
+]);
+
+const FORGE_SOFT_BAD_PHRASES = [
+  'community-driven',
+  'ai-powered',
+  'future of',
+  'designed to',
+  'built for attention',
+  'launch people actually want to join',
+  'turns',
+  'wins by',
+  'community-first',
+  'viral potential',
+  'where intelligence meets internet culture',
+  'hackathon-ready',
+  'persistent profile',
+  'meme launch concept',
+  'internet-native',
+  'shaped by',
+  'designed to leave',
+  'point of view',
+  'launch-ready',
+  'stands out',
+];
+
+function normalizeForgeWord(value: string) {
+  return value.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+}
+
+function compactTickerFromPhrase(value: string) {
+  const words = value
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((word) => !FORGE_BANNED_NAME_WORDS.has(word.toLowerCase()));
+
+  if (words.length === 0) return '$SLON';
+
+  const cleanedWords = words
+    .map((word) => word.replace(/[^a-zA-Z0-9]/g, '').toUpperCase())
+    .filter(Boolean);
+
+  const bestWord = cleanedWords
+    .slice()
+    .sort((a, b) => Math.abs(a.length - 4) - Math.abs(b.length - 4))[0] ?? 'SLON';
+
+  let candidate = bestWord;
+  if (candidate.length > 5) {
+    const first = candidate[0];
+    const compact = `${first}${candidate.slice(1).replace(/[AEIOU]/g, '')}`;
+    candidate = compact.length >= 3 ? compact.slice(0, 5) : candidate.slice(0, 5);
+  }
+
+  if (candidate.length < 3 && cleanedWords.length > 1) {
+    const pair = `${cleanedWords[0].slice(0, 2)}${cleanedWords[1].slice(0, 2)}`.replace(/[^A-Z0-9]/g, '');
+    if (pair.length >= 3) candidate = pair.slice(0, 5);
+  }
+
+  if (candidate.length < 3 && cleanedWords.length > 1) {
+    const acronym = cleanedWords.map((word) => word[0]).join('').slice(0, 5);
+    if (acronym.length >= 3) candidate = acronym;
+  }
+
+  if (candidate.length < 3) candidate = `${candidate}X`.slice(0, 3);
+
+  return `$${candidate}`;
+}
+
+function classifyForgeArchetype(input: ForgeInput): ForgeArchetype {
+  const full = [input.concept, input.memeCategory, input.enemyOrContrast, input.referenceStyle, input.launchGoal]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/(prompt|agent|terminal|ai|bot|model|compute|inference|gpu|llm)/.test(full)) return 'ai_irony';
+  if (/(church|ritual|cult|gospel|prophet|prayer|religion|sect|believer|faith)/.test(full)) return 'cult';
+  if (/(dog|cat|frog|ape|mascot|hamster|monkey|bear|pepe|wojak|shiba)/.test(full)) return 'mascot_war';
+  if (/(debug|ship|builder|browser|tab|gym|deploy|code|terminal|sprint|shipper)/.test(full)) return 'builder_underdog';
+  if (/(copy|paste|soulless|generic|fake|scam|rug|extract|npc|empty)/.test(full)) return 'anti_copycat';
+  if (/(printer|agenda|theory|alpha|cabal|insider|wire|desk|macro|whale)/.test(full)) return 'schizo_finance';
+  return 'terminal_absurdism';
+}
+
+function buildForgePosture(input: ForgeInput, archetype: ForgeArchetype) {
+  const vibe = (input.vibe ?? '').toLowerCase();
+  if (vibe.includes('menacing')) return 'predatory conviction';
+  if (vibe.includes('chaotic')) return 'weaponized timeline chaos';
+  if (vibe.includes('absurd')) return 'terminal absurdism';
+  if (vibe.includes('professional')) return 'fake-serious flex';
+  if (vibe.includes('cult')) return 'internet-cult conviction';
+  if (archetype == 'cult') return 'internet-cult conviction';
+  if (archetype == 'ai_irony') return 'terminal god-complex humor';
+  if (archetype == 'mascot_war') return 'mascot war energy';
+  if (archetype == 'builder_underdog') return 'underdog shipper bravado';
+  if (archetype == 'anti_copycat') return 'anti-copycat aggression';
+  if (archetype == 'schizo_finance') return 'schizo finance theater';
+  return 'inside-joke energy';
+}
+
+function scoreForgeWord(word: string) {
+  const cleaned = normalizeForgeWord(word);
+  if (!cleaned || cleaned.length < 3) return -10;
+  let score = 0;
+  if (cleaned.length >= 4 && cleaned.length <= 8) score += 7;
+  if (!FORGE_BANNED_NAME_WORDS.has(cleaned)) score += 6;
+  if (/[0-9]/.test(cleaned)) score -= 6;
+  if (/(protocol|reactor|signal|token|coin|launch|project|community|labs|dao)/.test(cleaned)) score -= 12;
+  if (/(loop|printer|cartel|church|hours|season|agenda|tax|terminal|gang|opera|shift|bot|theory|cabal|filter|gospel|tab|gym|alpha)/.test(cleaned)) score += 4;
+  return score;
+}
+
+function buildForgeLexicon(input: ForgeInput): ForgeLexicon {
   const concept = input.concept.trim();
+  const archetype = classifyForgeArchetype(input);
+  const posture = buildForgePosture(input, archetype);
   const quoted = extractQuotedPhrases(concept);
-  const words = extractAnchorWords(concept);
-  const lower = concept.toLowerCase();
-  const anchors = [...quoted];
+  const words = extractAnchorWords([
+    input.concept,
+    input.memeCategory ?? '',
+    input.launchGoal ?? '',
+    input.enemyOrContrast ?? '',
+    input.referenceStyle ?? '',
+  ].join(' '));
 
-  if ((lower.includes('browser') || lower.includes('tab')) && !anchors.includes('One Tab Empire')) anchors.push('One Tab Empire');
-  if (lower.includes('prompt') && !anchors.includes('Prompt Engineer')) anchors.push('Prompt Engineer');
-  if (lower.includes('generate') && lower.includes('gym') && !anchors.includes('Generate And Lift')) anchors.push('Generate And Lift');
-  if (lower.includes('debug') && !anchors.includes('While They Debug')) anchors.push('While They Debug');
-  if (lower.includes('underdog') && !anchors.includes('Underdog Build')) anchors.push('Underdog Build');
-  if (lower.includes('ship') && !anchors.includes('Ship First')) anchors.push('Ship First');
+  const strongWords = uniqueStrings(
+    [...quoted.flatMap((phrase) => extractAnchorWords(phrase)), ...words]
+      .filter((word) => scoreForgeWord(word) > 1)
+      .sort((a, b) => scoreForgeWord(b) - scoreForgeWord(a)),
+    10,
+  );
 
-  return uniqueStrings([...anchors, ...words], 12);
+  const strongPhrases = uniqueStrings(
+    [
+      ...quoted.filter((phrase) => phrase.split(/\s+/).length <= 3),
+      ...strongWords.flatMap((word, index) => {
+        const next = strongWords[index + 1];
+        return next ? [titleCase(`${word} ${next}`)] : [];
+      }),
+      ...words.slice(0, 4).flatMap((word, index) => {
+        const next = words[index + 1];
+        return next ? [titleCase(`${word} ${next}`)] : [];
+      }),
+    ],
+    10,
+  );
+
+  const fallbackWords = {
+    cult: ['Church', 'Season', 'Hours', 'Gospel'],
+    ai_irony: ['Terminal', 'Loop', 'Printer', 'Bot'],
+    mascot_war: ['Cartel', 'Gang', 'Army', 'Mafia'],
+    builder_underdog: ['Gym', 'Shift', 'Tab', 'Printer'],
+    anti_copycat: ['Filter', 'Exit', 'Tax', 'Police'],
+    schizo_finance: ['Agenda', 'Theory', 'Cabal', 'Alpha'],
+    terminal_absurdism: ['Opera', 'Agenda', 'Machine', 'World'],
+  } as const;
+
+  const finalWords = strongWords.length ? strongWords : fallbackWords[archetype];
+  const chantSeed = finalWords[0] ?? 'Glitch';
+  const visualSeed = finalWords[1] ?? chantSeed;
+
+  const defaultEnemy = {
+    cult: 'cold launches with no believers',
+    ai_irony: 'AI wrappers pretending to be culture',
+    mascot_war: 'mascots with no war cry',
+    builder_underdog: 'people still holding meetings while the timeline moves',
+    anti_copycat: 'copy-paste launches with no soul',
+    schizo_finance: 'chart cosplay with no myth behind it',
+    terminal_absurdism: 'forgettable launches that never earn a phrase',
+  } as const;
+
+  return {
+    archetype,
+    posture,
+    strongWords: finalWords,
+    strongPhrases,
+    enemyLine: input.enemyOrContrast?.trim() || defaultEnemy[archetype],
+    chantSeed,
+    visualSeed,
+  };
+}
+
+function splitForgeWords(value: string) {
+  return value.replace(/[^a-zA-Z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+}
+
+function combineForgeWords(primary: string, secondary: string) {
+  const a = primary.replace(/\s+/g, '');
+  const b = secondary.replace(/\s+/g, '');
+  if (!a || !b) return '';
+  if ((a + b).length <= 15) return titleCase(`${a}${b}`);
+  const clippedA = a.length > 6 ? `${a.slice(0, 4)}${a.slice(4).replace(/[aeiou]/gi, '').slice(0, 2)}` : a;
+  const clippedB = b.length > 6 ? b.slice(0, 4) : b;
+  return titleCase(`${clippedA}${clippedB}`.slice(0, 15));
+}
+
+function buildNameCandidates(input: ForgeInput, lexicon: ForgeLexicon) {
+  const [primary = 'Glitch', secondary = 'Printer', tertiary = 'Season'] = lexicon.strongWords;
+  const candidates: string[] = [
+    ...lexicon.strongPhrases,
+    primary,
+    titleCase(`${primary} ${secondary}`),
+    combineForgeWords(primary, secondary),
+    titleCase(`${primary} ${tertiary}`),
+  ];
+
+  switch (lexicon.archetype) {
+    case 'cult':
+      candidates.push(`${primary} Hours`, `${primary} Church`, `${primary} Gospel`, `House Of ${primary}`, `${primary} Season`);
+      break;
+    case 'ai_irony':
+      candidates.push(`${primary} Terminal`, `${primary} Loop`, `${primary} Printer`, `${primary} Bot`, combineForgeWords(primary, 'Terminal'));
+      break;
+    case 'mascot_war':
+      candidates.push(`${primary} Cartel`, `${primary} Gang`, `${primary} Mafia`, `${secondary} Cartel`, `${primary} Army`);
+      break;
+    case 'builder_underdog':
+      candidates.push(`${primary} Gym`, `${primary} Shift`, `${primary} Tab`, `${primary} Printer`, `${primary} Hours`);
+      break;
+    case 'anti_copycat':
+      candidates.push(`No ${primary}`, `${primary} Filter`, `${primary} Exit`, `${primary} Tax`, `${primary} Police`);
+      break;
+    case 'schizo_finance':
+      candidates.push(`${primary} Agenda`, `${primary} Theory`, `${primary} Cabal`, `${primary} Alpha`, `${primary} Desk`);
+      break;
+    default:
+      candidates.push(`${primary} Opera`, `${primary} Agenda`, `${primary} Machine`, `${primary} World`, `${primary} TV`);
+      break;
+  }
+
+  if (input.launchGoal?.trim()) {
+    const goalWord = extractAnchorWords(input.launchGoal)[0];
+    if (goalWord && scoreForgeWord(goalWord) > 0) candidates.push(`${primary} ${goalWord}`);
+  }
+
+  return uniqueStrings(candidates.map(titleCase));
+}
+
+function isValidForgeName(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const words = splitForgeWords(trimmed);
+  if (words.length > 3) return false;
+  if (trimmed.length < 3 || trimmed.length > 22) return false;
+  if (words.every((word) => FORGE_BANNED_NAME_WORDS.has(word.toLowerCase()))) return false;
+  if (words.some((word) => /(protocol|signal|reactor|dao|network|platform|labs)/i.test(word))) return false;
+  return true;
+}
+
+function scoreForgeName(value: string, input: ForgeInput, lexicon: ForgeLexicon) {
+  const trimmed = value.trim();
+  if (!isValidForgeName(trimmed)) return -100;
+  const words = splitForgeWords(trimmed);
+  const normalized = trimmed.toLowerCase();
+  let score = 0;
+  if (words.length === 1) score += 9;
+  if (words.length === 2) score += 7;
+  if (trimmed.length >= 4 && trimmed.length <= 14) score += 8;
+  if (!FORGE_SOFT_BAD_PHRASES.some((phrase) => normalized.includes(phrase))) score += 4;
+  if (lexicon.strongWords.some((word) => normalized.includes(word.toLowerCase()))) score += 10;
+  if (lexicon.strongPhrases.some((phrase) => normalized.includes(phrase.toLowerCase()))) score += 4;
+  if (lexicon.archetype === 'cult' && /(season|gospel|hours|house|church)/i.test(trimmed)) score += 5;
+  if (lexicon.archetype === 'ai_irony' && /(terminal|loop|printer|bot)/i.test(trimmed)) score += 5;
+  if (lexicon.archetype === 'mascot_war' && /(cartel|gang|mafia|army|wars)/i.test(trimmed)) score += 5;
+  if (lexicon.archetype === 'builder_underdog' && /(gym|printer|tab|hours|shift)/i.test(trimmed)) score += 5;
+  if (lexicon.archetype === 'anti_copycat' && /(no|exit|filter|tax|police)/i.test(trimmed)) score += 5;
+  if (lexicon.archetype === 'schizo_finance' && /(agenda|theory|cabal|alpha|desk)/i.test(trimmed)) score += 5;
+  if (/(community|driven|future|powered|network|protocol|platform|labs)/i.test(trimmed)) score -= 12;
+  if (/(mode|club|signal|reactor|labs)/i.test(trimmed)) score -= 10;
+  return score;
 }
 
 function buildNameOptions(input: ForgeInput) {
-  const anchors = extractConceptAnchors(input);
-  const concept = input.concept.toLowerCase();
-  const generated: string[] = [];
+  const lexicon = buildForgeLexicon(input);
+  const ranked = buildNameCandidates(input, lexicon)
+    .filter(isValidForgeName)
+    .sort((a, b) => scoreForgeName(b, input, lexicon) - scoreForgeName(a, input, lexicon));
 
-  if (anchors.includes('Prompt Engineer')) generated.push('Prompt Engineer');
-  if (concept.includes('browser') || concept.includes('tab')) {
-    generated.push('One Tab Empire', 'Single Tab Signal', 'Tablord');
+  return uniqueStrings(ranked, 5);
+}
+
+function scoreForgeTicker(value: string, lexicon: ForgeLexicon) {
+  const ticker = value.replace('$', '').toUpperCase();
+  if (ticker.length < 3 || ticker.length > 6) return -100;
+  let score = 0;
+  if (ticker.length >= 3 && ticker.length <= 5) score += 9;
+  if (/[AEIOUY]/.test(ticker)) score += 5;
+  if (/^(MEME|RAID|CULT|SIGNAL|TOKEN|COIN|ALPHA|MOON)$/i.test(ticker)) score -= 24;
+  if (lexicon.strongWords.some((word) => ticker.includes(normalizeForgeWord(word).slice(0, 3).toUpperCase()))) score += 6;
+  if (/^[BCDFGHJKLMNPQRSTVWXYZ]{5,6}$/.test(ticker)) score -= 6;
+  if (/(GPT|AIB|MEM|TOK|COI)$/.test(ticker)) score -= 6;
+  return score;
+}
+
+function buildTickerCandidates(seed: string) {
+  const words = splitForgeWords(seed).filter((word) => !FORGE_BANNED_NAME_WORDS.has(word.toLowerCase()));
+  if (words.length === 0) return ['$SLON'];
+
+  const outputs: string[] = [];
+  const cleaned = words.map((word) => word.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()).filter(Boolean);
+  for (const word of cleaned) {
+    if (word.length >= 3 && word.length <= 5) outputs.push(`$${word}`);
+    if (word.length > 5) {
+      const compact = `${word[0]}${word.slice(1).replace(/[AEIOU]/g, '')}`;
+      outputs.push(`$${compact.slice(0, 5)}`);
+      outputs.push(`$${word.slice(0, 5)}`);
+    }
   }
-  if (concept.includes('generate')) generated.push('Generate And Lift');
-  if (concept.includes('debug')) generated.push('While They Debug');
-  if (concept.includes('gym') || concept.includes('lift')) generated.push('Gym While They Debug');
-  if (concept.includes('underdog')) generated.push('Underdog Build');
 
-  const filteredAnchors = anchors
-    .filter((anchor) => !GENERIC_FORGE_WORDS.has(anchor.toLowerCase()))
-    .filter((anchor) => anchor.split(/\s+/).length <= 3);
+  if (cleaned.length > 1) {
+    const pair = `${cleaned[0].slice(0, 2)}${cleaned[1].slice(0, 2)}`;
+    if (pair.length >= 3) outputs.push(`$${pair.slice(0, 5)}`);
+    const blend = `${cleaned[0].slice(0, 3)}${cleaned[1].slice(0, 2)}`;
+    if (blend.length >= 3) outputs.push(`$${blend.slice(0, 5)}`);
+    const acronym = cleaned.map((word) => word[0]).join('');
+    if (acronym.length >= 3) outputs.push(`$${acronym.slice(0, 5)}`);
+  }
 
-  generated.push(...filteredAnchors);
-
-  const first = filteredAnchors[0] || 'Signal';
-  const second = filteredAnchors[1] || 'Tab';
-  generated.push(`${first} Empire`, `${second} Club`, `${first} Mode`);
-
-  return uniqueStrings(generated.map(titleCase).filter((name) => {
-    const words = name.toLowerCase().split(/\s+/);
-    return !(words.length === 1 && GENERIC_FORGE_WORDS.has(words[0]));
-  }), 5);
+  outputs.push(compactTickerFromPhrase(seed));
+  return uniqueStrings(outputs);
 }
 
 function buildTickerOptions(nameOptions: string[], input: ForgeInput) {
-  const anchors = extractConceptAnchors(input);
-  const candidates = [
-    ...nameOptions.map(compactTickerFromPhrase),
-    ...anchors.slice(0, 5).map(compactTickerFromPhrase),
-  ];
+  const lexicon = buildForgeLexicon(input);
+  const wordSeeds = uniqueStrings([
+    ...nameOptions,
+    ...lexicon.strongWords,
+    ...lexicon.strongPhrases,
+  ]);
 
-  return uniqueStrings(candidates.filter((ticker) => !['$MEME', '$RAID', '$CULT'].includes(ticker)), 5);
+  const candidates = uniqueStrings(wordSeeds.flatMap((seed) => buildTickerCandidates(seed)));
+
+  return candidates
+    .filter((ticker) => !['$MEME', '$RAID', '$CULT'].includes(ticker))
+    .sort((a, b) => scoreForgeTicker(b, lexicon) - scoreForgeTicker(a, lexicon))
+    .slice(0, 5);
 }
 
 function isWeakForgeName(value?: string | null) {
   const name = (value ?? '').trim();
   if (!name) return true;
-  const words = name.toLowerCase().split(/\s+/).filter(Boolean);
-  if (name.length < 3) return true;
-  if (words.length === 1 && (GENERIC_FORGE_WORDS.has(words[0]) || words[0] === 'a')) return true;
-  if (words.some((word) => word === 'protocol' || word === 'reactor' || word === 'signal' || word === 'cult')) return true;
-  return false;
+  return scoreForgeName(name, {
+    concept: name,
+    targetAudience: 'Degens',
+    vibe: 'Chaotic',
+  }, buildForgeLexicon({ concept: name, targetAudience: 'Degens', vibe: 'Chaotic' })) < 6;
+}
+
+function isWeakForgeLine(value?: string | null) {
+  const line = (value ?? '').trim();
+  if (!line || line.length < 18) return true;
+  const lower = line.toLowerCase();
+  return FORGE_SOFT_BAD_PHRASES.some((phrase) => lower.includes(phrase)) || /(community-driven|ai-powered|future of|utility|point of view|designed to|built around)/i.test(lower);
+}
+
+function scoreForgeLine(value: string, lexicon: ForgeLexicon, mode: 'hero' | 'copy' | 'lore' | 'hook') {
+  const line = value.trim();
+  if (!line) return -100;
+  if (isWeakForgeLine(line)) return -40;
+  const lower = line.toLowerCase();
+  let score = 0;
+  if (mode === 'hero') {
+    if (line.length >= 24 && line.length <= 110) score += 10;
+    if (/\./.test(line)) score += 3;
+  } else {
+    if (line.length >= 28 && line.length <= 180) score += 6;
+  }
+  if (/(they|while|not|against|just|still|already|came|brought|post)/i.test(line)) score += 5;
+  if (lexicon.strongWords.some((word) => lower.includes(word.toLowerCase()))) score += 6;
+  if (lower.includes(lexicon.enemyLine.toLowerCase().split(' ')[0] ?? '')) score += 2;
+  if (/(community-driven|ai-powered|future of|utility|project|platform|ecosystem)/i.test(line)) score -= 12;
+  return score;
+}
+
+function mergeForgeList(primary: string[] | undefined, fallback: string[], limit: number, score: (value: string) => number) {
+  return uniqueStrings([...(primary ?? []), ...fallback])
+    .filter((value) => score(value) > -50)
+    .sort((a, b) => score(b) - score(a))
+    .slice(0, limit);
+}
+
+function createHeroLine(projectName: string, input: ForgeInput, lexicon: ForgeLexicon) {
+  const enemy = lexicon.enemyLine.toLowerCase();
+  const chantSeed = lexicon.chantSeed.toLowerCase();
+
+  switch (lexicon.archetype) {
+    case 'cult':
+      return `They brought another launch. ${projectName} brought a religion.`;
+    case 'ai_irony':
+      return `${projectName} is what happens when ${chantSeed} gets terminal access and a feed to infect.`;
+    case 'mascot_war':
+      return `${projectName} is not here to blend in. It is here to make the feed pick a side.`;
+    case 'builder_underdog':
+      return `While they are still in meetings, ${projectName} is already all over the timeline.`;
+    case 'anti_copycat':
+      return `${projectName} exists to embarrass ${enemy} with something people will actually repeat.`;
+    case 'schizo_finance':
+      return `${projectName} turns market brain damage into one clean thing the timeline can chant.`;
+    default:
+      return `${projectName} is not another launch. It is a phrase the feed will still be repeating tonight.`;
+  }
 }
 
 function createHeuristicIdentity(input: ForgeInput): LaunchIdentity {
   const normalized = input.concept.trim() || 'AI meme cult';
   const audience = input.targetAudience || 'Degens';
-  const vibeWord = input.vibe || 'Chaotic';
-  const category = input.memeCategory || 'internet-native cult';
-  const launchGoal = input.launchGoal || 'win early attention and survive day-two fade';
-  const enemy = input.enemyOrContrast || 'copy-paste launches with no identity';
-  const reference = input.referenceStyle || 'crypto war-room minimalism';
-  const anchors = extractConceptAnchors(input);
+  const category = input.memeCategory || 'internet-native meme';
+  const reference = input.referenceStyle || 'war-room screenshot energy';
+  const lexicon = buildForgeLexicon(input);
   const nameOptions = buildNameOptions(input);
-  const projectName = nameOptions[0] || anchors[0] || 'Sloan Signal';
+  const projectName = nameOptions[0] || lexicon.strongWords[0] || 'Glitch Season';
   const tickerOptions = buildTickerOptions(nameOptions, input);
-  const leadAnchor = anchors[0] || projectName;
-  const secondAnchor = anchors[1] || audience;
-  const lower = normalized.toLowerCase();
-
-  const heroLine = lower.includes('debug') && lower.includes('gym')
-    ? `While they debug, ${projectName} hits generate and leaves for the gym.`
-    : lower.includes('tab')
-      ? `${projectName} ships harder from one tab than most teams do from ten tools.`
-      : `${projectName} turns ${leadAnchor.toLowerCase()} into a launch people actually want to join.`;
+  const heroLine = createHeroLine(projectName, input, lexicon);
+  const ticker = tickerOptions[0] || '$GLCH';
+  const topWord = lexicon.chantSeed;
+  const secondWord = lexicon.visualSeed || audience;
 
   return {
     projectName,
-    projectSummary: `${projectName} is a ${category} concept for ${audience.toLowerCase()} built around ${leadAnchor.toLowerCase()}. It wins by leaning into ${secondAnchor.toLowerCase()} instead of ${enemy.toLowerCase()}.`,
+    projectSummary: `${projectName} is a ${category.toLowerCase()} built around ${topWord.toLowerCase()} and ${lexicon.posture}. The goal is simple: beat ${lexicon.enemyLine.toLowerCase()} with a name, ticker, and phrase the timeline actually wants to pass around.`,
     heroLine,
     memeDNA: uniqueStrings([
-      `${vibeWord.toLowerCase()} internet underdog`,
-      `${audience.toLowerCase()}-native posting fuel`,
-      `${category.toLowerCase()} with real contrast`,
-      `${leadAnchor.toLowerCase()} as a repeatable hook`,
-      'screenshot-friendly launch identity',
+      lexicon.posture,
+      `${category.toLowerCase()} with a repeatable phrase`,
+      `${topWord.toLowerCase()} as the chant anchor`,
+      'reply-native launch language',
+      'one screenshot identity the timeline can copy',
     ], 5),
     nameOptions,
     tickerOptions,
     lore: [
-      `${projectName} started as a joke about ${leadAnchor.toLowerCase()}, then the timeline realized it was more postable than the usual launch filler.`,
-      `The crowd treats ${projectName} like an answer to ${enemy.toLowerCase()}, not just another coin with a mascot and no angle.`,
-      `${projectName} exists to turn ${secondAnchor.toLowerCase()} into a community language people can repeat on launch day.`,
+      `${projectName} started as something the feed could laugh at, then turned into something people kept repeating anyway.`,
+      `The point is not utility theatre. The point is to make ${topWord.toLowerCase()} feel unavoidable for one clean attention window.`,
+      `${projectName} wins when people can quote it, mock it, and still keep posting ${ticker}.`,
     ],
     slogans: uniqueStrings([
       heroLine,
-      `Built on ${leadAnchor.toLowerCase()}. Posted by ${audience.toLowerCase()}.`,
-      `Less ${enemy.toLowerCase()}. More ${projectName.toLowerCase()}.`,
-      'Ship first. Make the feed catch up.',
+      `${ticker} or stay in the replies.`,
+      `They brought another roadmap. We brought ${projectName}.`,
+      `Say less. Post ${ticker}.`,
     ], 4),
     communityHooks: [
-      `Turn ${leadAnchor} into the line people quote in replies.`,
-      `Use ${secondAnchor} as the recurring inside-joke phrase on launch day.`,
-      'Give the first posters a call-and-response line the whole timeline can copy.',
+      `Chant line: “${ticker} is the only one with a pulse.”`,
+      `Turn ${topWord} into the repeated inside-word under every launch post.`,
+      `Make the first 10 replies sound like one movement, not random noise.`,
     ],
     ritualIdeas: [
-      `Post one daily ${leadAnchor.toLowerCase()} check-in at the same hour.`,
-      'Pick one line from the hero copy and make it the default reply under milestone posts.',
-      'Use one repeated screenshot layout so every repost feels like part of the same campaign.',
+      `Post one daily “${projectName} check” at the same hour and keep the wording identical.`,
+      `Use one repeated screenshot format so every repost looks like it belongs to the same movement.`,
+      `Pick one slogan and make it the default community response on milestones.`,
     ],
     enemyFraming: [
-      `Against ${enemy.toLowerCase()}.`,
-      `${projectName} is for people who want a sharper joke and a cleaner reason to care.`,
+      `Against ${lexicon.enemyLine.toLowerCase()}.`,
+      `${projectName} is for people who want something sharper than generic launch theatre.`,
     ],
     launchCopy: [
-      `Introducing ${projectName}. ${normalized} Built for ${audience.toLowerCase()} and ready to own one clean attention window.`,
-      `${projectName} is what happens when ${leadAnchor.toLowerCase()} becomes a meme launch instead of a passing joke.`,
-      `If most launches feel copy-pasted, ${projectName} is the one that shows up with ${reference.toLowerCase()} energy and an actual point of view.`,
+      `Introducing ${projectName}. ${normalized} with ${lexicon.posture} and a ticker the feed can actually chant: ${ticker}.`,
+      `${projectName} is the launch for people tired of ${lexicon.enemyLine.toLowerCase()} pretending to be culture.`,
+      `Built for ${audience.toLowerCase()}, shaped like ${reference.toLowerCase()}, and made to leave one line stuck in the timeline.`,
     ],
     launchChecklist: [
-      'Lock the hero line, lead name, and first ticker before launch.',
-      'Prepare three replies built around the strongest inside joke from the concept.',
-      'Decide the first rivalry or contrast angle before posting the launch thread.',
-      'Launch the full pack inside one tight attention window so the story lands together.',
+      'Lock one lead name and one chantable ticker before touching visuals.',
+      'Choose the single enemy line the launch will repeat all day.',
+      'Prepare the first post plus three replies that all sound like the same movement.',
+      'Keep the launch window tight so the phrase, the enemy, and the meme all land together.',
     ],
     aestheticDirection: [
-      `${vibeWord.toLowerCase()} terminal energy built around ${leadAnchor.toLowerCase()}`,
-      `visual style inspired by ${reference.toLowerCase()}`,
-      'high-contrast assets built for reposts, screenshots, and quote tweets',
+      `${lexicon.posture} with ${topWord.toLowerCase()} as the visual anchor`,
+      `screenshots and assets inspired by ${reference.toLowerCase()}`,
+      'high-contrast, repost-friendly visuals built for quote tweets and replies',
     ],
   };
 }
 
 function repairIdentityOutput(input: ForgeInput, identity: LaunchIdentity) {
   const heuristic = createHeuristicIdentity(input);
+  const lexicon = buildForgeLexicon(input);
+  const fallbackName = heuristic.projectName;
+  const combinedNames = mergeForgeList(identity.nameOptions, heuristic.nameOptions, 5, (value) => scoreForgeName(value, input, lexicon));
+  const combinedTickers = mergeForgeList(identity.tickerOptions, heuristic.tickerOptions, 5, (value) => scoreForgeTicker(value, lexicon));
+
   const repaired: LaunchIdentity = {
     ...identity,
-    projectName: isWeakForgeName(identity.projectName) ? heuristic.projectName : identity.projectName,
-    projectSummary: identity.projectSummary && identity.projectSummary.length > 24 ? identity.projectSummary : heuristic.projectSummary,
-    heroLine: identity.heroLine && identity.heroLine.length > 18 ? identity.heroLine : heuristic.heroLine,
-    memeDNA: uniqueStrings([...(identity.memeDNA ?? []), ...heuristic.memeDNA], 5),
-    nameOptions: uniqueStrings([...(identity.nameOptions ?? []).filter((name) => !isWeakForgeName(name)), ...heuristic.nameOptions], 5),
-    tickerOptions: uniqueStrings([...(identity.tickerOptions ?? []).filter((ticker) => !['$MEME', '$RAID', '$CULT'].includes(ticker)), ...heuristic.tickerOptions], 5),
-    lore: uniqueStrings([...(identity.lore ?? []), ...heuristic.lore], 3),
-    slogans: uniqueStrings([...(identity.slogans ?? []), ...heuristic.slogans], 4),
-    communityHooks: uniqueStrings([...(identity.communityHooks ?? []), ...(heuristic.communityHooks ?? [])], 3),
-    ritualIdeas: uniqueStrings([...(identity.ritualIdeas ?? []), ...(heuristic.ritualIdeas ?? [])], 3),
-    enemyFraming: uniqueStrings([...(identity.enemyFraming ?? []), ...(heuristic.enemyFraming ?? [])], 2),
-    launchCopy: uniqueStrings([...(identity.launchCopy ?? []), ...heuristic.launchCopy], 3),
-    launchChecklist: uniqueStrings([...(identity.launchChecklist ?? []), ...(heuristic.launchChecklist ?? [])], 4),
-    aestheticDirection: uniqueStrings([...(identity.aestheticDirection ?? []), ...heuristic.aestheticDirection], 3),
+    projectName: isWeakForgeName(identity.projectName)
+      ? (combinedNames[0] || fallbackName)
+      : identity.projectName,
+    projectSummary: !isWeakForgeLine(identity.projectSummary) && scoreForgeLine(identity.projectSummary ?? '', lexicon, 'copy') > 2
+      ? identity.projectSummary
+      : heuristic.projectSummary,
+    heroLine: !isWeakForgeLine(identity.heroLine) && scoreForgeLine(identity.heroLine ?? '', lexicon, 'hero') > 5
+      ? identity.heroLine
+      : heuristic.heroLine,
+    memeDNA: mergeForgeList(identity.memeDNA, heuristic.memeDNA, 5, (value) => value.length > 8 ? 2 : -10),
+    nameOptions: combinedNames,
+    tickerOptions: combinedTickers,
+    lore: mergeForgeList(identity.lore, heuristic.lore, 3, (value) => scoreForgeLine(value, lexicon, 'lore')),
+    slogans: mergeForgeList(identity.slogans, heuristic.slogans, 4, (value) => scoreForgeLine(value, lexicon, 'hero')),
+    communityHooks: mergeForgeList(identity.communityHooks, heuristic.communityHooks ?? [], 3, (value) => scoreForgeLine(value, lexicon, 'hook')),
+    ritualIdeas: mergeForgeList(identity.ritualIdeas, heuristic.ritualIdeas ?? [], 3, (value) => scoreForgeLine(value, lexicon, 'hook')),
+    enemyFraming: mergeForgeList(identity.enemyFraming, heuristic.enemyFraming ?? [], 2, (value) => scoreForgeLine(value, lexicon, 'hook')),
+    launchCopy: mergeForgeList(identity.launchCopy, heuristic.launchCopy, 3, (value) => scoreForgeLine(value, lexicon, 'copy')),
+    launchChecklist: mergeForgeList(identity.launchChecklist, heuristic.launchChecklist ?? [], 4, (value) => value.length > 12 ? value.length : -20),
+    aestheticDirection: mergeForgeList(identity.aestheticDirection, heuristic.aestheticDirection, 3, (value) => value.length > 12 ? value.length : -20),
   };
 
-  if (isWeakForgeName(repaired.projectName)) repaired.projectName = heuristic.projectName;
-  if ((repaired.heroLine ?? '').toLowerCase().includes('turns playful internet energy')) repaired.heroLine = heuristic.heroLine;
+  if (isWeakForgeName(repaired.projectName)) repaired.projectName = fallbackName;
+  if (isWeakForgeLine(repaired.heroLine)) repaired.heroLine = heuristic.heroLine;
+  if (isWeakForgeLine(repaired.projectSummary)) repaired.projectSummary = heuristic.projectSummary;
   return repaired;
 }
 
@@ -2237,7 +2579,6 @@ function buildDynamicQuestSet(tokens: Token[]) {
     (token) => token.volume24h + token.holders,
   )[0] || live[Math.min(2, live.length - 1)] || live[0];
 
-  const rivalryToken = live.find((token) => token.slug !== hotToken.slug && token.slug !== newToken.slug) || volumeLeader || hotToken;
 
   const seeds: Quest[] = [
     {
@@ -2286,21 +2627,6 @@ function buildDynamicQuestSet(tokens: Token[]) {
       missionBrief: `${newToken.name} is still fresh. Create one caption, slogan, or meme format the community can keep repeating after the first spike.`,
     },
     {
-      id: `auto-rival-${toQuestSlug(hotToken.slug)}-${toQuestSlug(rivalryToken.slug)}`,
-      title: `${hotToken.name} vs ${rivalryToken.name}`,
-      description: buildQuestDescription('rivalry', hotToken, rivalryToken),
-      category: 'rivalry',
-      reward: 470,
-      deadline: new Date(Date.now() + 1000 * 60 * 60 * 16).toISOString(),
-      progress: 16,
-      completed: false,
-      tokenSlug: hotToken.slug,
-      tokenName: hotToken.name,
-      difficulty: 'hard',
-      proofType: 'text',
-      missionBrief: `Frame ${hotToken.name} against ${rivalryToken.name} in one line the community can actually reuse. This is not a chart debate. It is a story war.`,
-    },
-    {
       id: `auto-recovery-${toQuestSlug(recoveryToken.slug)}`,
       title: `Recovery angle for ${recoveryToken.name}`,
       description: buildQuestDescription('recovery', recoveryToken),
@@ -2323,40 +2649,42 @@ function buildDynamicQuestSet(tokens: Token[]) {
 export const tokenApi = {
   getAll: async () => {
     if (hasSupabaseBackend) return getLiveTokensOnly();
-    return getJson<Token[]>('/api/tokens', mockTokens);
+    if (allowMockData) return getJson<Token[]>('/api/tokens', mockTokens);
+    return [];
   },
   getBySlug: async (slug: string) => {
     if (hasSupabaseBackend) {
       const row = await selectRows<DbToken | null>('tokens', { filters: { slug }, single: true }, null);
       return row ? mapToken(row) : undefined;
     }
-    return getJson<Token | undefined>(`/api/tokens/${slug}`, mockTokens.find(t => t.slug === slug));
+    if (allowMockData) return getJson<Token | undefined>(`/api/tokens/${slug}`, mockTokens.find(t => t.slug === slug));
+    return undefined;
   },
   getConviction: async (slug: string) => {
     if (hasSupabaseBackend) return getConvictionFromSupabase(slug);
 
-    const fallback = mockConvictionData[slug];
+    const fallback = allowMockData ? mockConvictionData[slug] : undefined;
     if (fallback) return getJson<ConvictionAnalysis | undefined>(`/api/tokens/${slug}/conviction`, fallback);
 
-    const token = mockTokens.find(item => item.slug === slug);
+    const token = allowMockData ? mockTokens.find(item => item.slug === slug) : undefined;
     return token ? createHeuristicConviction(token) : undefined;
   },
   getSwarmData: async (slug: string) => {
     if (hasSupabaseBackend) return getSwarmFromSupabase(slug);
 
-    const fallback = mockSwarmData[slug];
+    const fallback = allowMockData ? mockSwarmData[slug] : undefined;
     if (fallback) return getJson<SwarmBehavior[] | undefined>(`/api/tokens/${slug}/swarm`, fallback);
 
-    const token = mockTokens.find(item => item.slug === slug);
+    const token = allowMockData ? mockTokens.find(item => item.slug === slug) : undefined;
     return token ? createHeuristicSwarm(token) : [];
   },
   getLoreStream: async (slug: string) => {
     if (hasSupabaseBackend) return getLoreFromSupabase(slug);
 
-    const fallback = mockLoreStream[slug];
+    const fallback = allowMockData ? mockLoreStream[slug] : undefined;
     if (fallback) return getJson<LoreEntry[] | undefined>(`/api/tokens/${slug}/lore`, fallback);
 
-    const token = mockTokens.find(item => item.slug === slug);
+    const token = allowMockData ? mockTokens.find(item => item.slug === slug) : undefined;
     return token ? createHeuristicLore(token) : [];
   },
   getLatestSync: async () => {
@@ -2364,7 +2692,7 @@ export const tokenApi = {
     return null;
   },
   getRankBuckets: async () => {
-    const tokens = hasSupabaseBackend ? await getLiveTokensOnly() : mockTokens;
+    const tokens = hasSupabaseBackend ? await getLiveTokensOnly() : (allowMockData ? mockTokens : []);
     const hot = rankBucket(tokens, ['HOT', 'SEARCH-HOT']);
     const newest = rankBucket(tokens, ['NEW', 'SEARCH-NEW']).length > 0 ? rankBucket(tokens, ['NEW', 'SEARCH-NEW']) : byDescending(tokens, (token) => new Date(token.lastSyncedAt || 0).getTime()).slice(0, 6);
     const volume = rankBucket(tokens, ['VOL_DAY_1', 'VOLUME', 'DEX', 'RANKING-VOLUME']).length > 0 ? rankBucket(tokens, ['VOL_DAY_1', 'VOLUME', 'DEX', 'RANKING-VOLUME']) : byDescending(tokens, (token) => token.volume24h).slice(0, 6);
@@ -2377,7 +2705,7 @@ export const tokenApi = {
     };
   },
   getLivePulse: async () => {
-    const tokens = hasSupabaseBackend ? await getLiveTokensOnly() : mockTokens;
+    const tokens = hasSupabaseBackend ? await getLiveTokensOnly() : (allowMockData ? mockTokens : []);
     return createLivePulse(tokens).slice(0, 8);
   },
   syncFromFourMeme: async () => {
@@ -2672,7 +3000,8 @@ export const prophetApi = {
       const rows = await selectRows<DbProphet[]>('prophets', { orderBy: { column: 'rank', ascending: true } }, []);
       return sanitizeProphets(rows.map(mapProphet));
     }
-    return getJson<Prophet[]>('/api/prophets/leaderboard', mockProphets);
+    if (allowMockData) return getJson<Prophet[]>('/api/prophets/leaderboard', mockProphets);
+    return [];
   },
   getByUsername: async (username: string) => {
     const leaderboard = await prophetApi.getLeaderboard();
@@ -2683,7 +3012,8 @@ export const prophetApi = {
       const mapped = row ? mapProphet(row) : undefined;
       return mapped && !isDemoUsername(mapped.username) ? mapped : undefined;
     }
-    return getJson<Prophet | undefined>(`/api/prophets/${username}`, mockProphets.find(p => p.username === username));
+    if (allowMockData) return getJson<Prophet | undefined>(`/api/prophets/${username}`, mockProphets.find(p => p.username === username));
+    return undefined;
   },
 };
 
@@ -2699,7 +3029,8 @@ export const userApi = {
         return deriveUserProfileFromAuthProfile(authProfileRow);
       }
     }
-    return getJson<UserProfile | undefined>(`/api/users/${username}`, mockUserProfiles[username]);
+    if (allowMockData) return getJson<UserProfile | undefined>(`/api/users/${username}`, mockUserProfiles[username]);
+    return undefined;
   },
   updateProfile: async (username: string, data: Partial<UserProfile>) => {
     if (hasSupabaseBackend) {
@@ -2727,8 +3058,12 @@ export const userApi = {
       return response.json();
     }
 
-    const nextProfile = { ...mockUserProfiles[username], ...data };
-    return Promise.resolve(nextProfile);
+    if (allowMockData) {
+      const nextProfile = { ...mockUserProfiles[username], ...data };
+      return Promise.resolve(nextProfile);
+    }
+
+    throw new Error('Profile update requires a configured backend.');
   },
   getCounterfactuals: async (username: string) => {
     const tokens = await tokenApi.getAll();
@@ -2741,7 +3076,7 @@ export const userApi = {
       return uniqueCounterfactualEntries([...(liveRows || []), ...derived]).slice(0, 8);
     }
 
-    const mockRows = await getJson<CounterfactualEntry[]>('/api/users/counterfactuals', mockCounterfactuals);
+    const mockRows = allowMockData ? await getJson<CounterfactualEntry[]>('/api/users/counterfactuals', mockCounterfactuals) : [];
     return uniqueCounterfactualEntries([...(mockRows || []), ...derived]).slice(0, 8);
   },
 };
@@ -2781,17 +3116,19 @@ export const raidApi = {
       const rows = await selectRows<DbRaidCampaign[]>('raid_campaigns', { orderBy: { column: 'engagement', ascending: false } }, []);
       return sanitizeRaids(rows.map(mapRaid));
     }
-    return getJson<RaidCampaign[]>('/api/raids', mockRaidCampaigns);
+    if (allowMockData) return getJson<RaidCampaign[]>('/api/raids', mockRaidCampaigns);
+    return [];
   },
   getActive: async () => {
     if (hasSupabaseBackend) {
       const rows = await selectRows<DbRaidCampaign[]>('raid_campaigns', { filters: { status: 'active' }, orderBy: { column: 'engagement', ascending: false } }, []);
       return sanitizeRaids(rows.map(mapRaid));
     }
-    return getJson<RaidCampaign[]>('/api/raids?status=active', mockRaidCampaigns.filter(c => c.status === 'active'));
+    if (allowMockData) return getJson<RaidCampaign[]>('/api/raids?status=active', mockRaidCampaigns.filter(c => c.status === 'active'));
+    return [];
   },
-  getContentVariants: async () => getJson('/api/raids/content-variants', mockContentVariants),
-  getReplyLines: async () => getJson('/api/raids/reply-lines', mockReplyLines),
+  getContentVariants: async () => allowMockData ? getJson('/api/raids/content-variants', mockContentVariants) : [],
+  getReplyLines: async () => allowMockData ? getJson('/api/raids/reply-lines', mockReplyLines) : [],
   getLastGenerated: async () => {
     const stored = readStorage<GeneratedRaidContent | null>(STORAGE_KEYS.raids, null);
     if (hasSupabaseBackend) {

@@ -73,7 +73,7 @@ function getResolutionWindow(predictions: Prediction[], username: string) {
 
 export function MirrorFeed() {
   const { profile } = useAuth();
-  const username = profile?.username || 'current_user';
+  const username = profile?.username || '';
   const { data: counterfactuals, loading: counterfactualLoading } = useApi(() => userApi.getCounterfactuals(username), [username]);
   const { data: predictions, loading: predictionLoading } = useApi(() => predictionApi.getByUser(username), [username]);
   const { data: tokens, loading: tokenLoading } = useApi(tokenApi.getAll);

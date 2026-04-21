@@ -21,24 +21,24 @@ import { useMutation } from '../hooks/useApi';
 import type { ForgeInput, LaunchIdentity } from '../types';
 
 const defaultIdentity: LaunchIdentity = {
-  projectName: 'Sloan Demo Project',
-  projectSummary: 'A hackathon-ready meme launch concept with enough identity to stand out and enough structure to feel intentional.',
-  heroLine: 'Not another meme. A launch with posture.',
-  memeDNA: ['AI-Native', 'Community-First', 'Viral Potential', 'Meme Culture'],
-  nameOptions: ['PepeAI', 'AiDoge', 'MemeGPT', 'TokenBot', 'CryptoMind'],
-  tickerOptions: ['$PEAI', '$AIDG', '$MGPT', '$TBOT', '$CMND'],
+  projectName: 'Glitch Season',
+  projectSummary: 'Glitch Season is built around one repeatable phrase, one clean enemy, and a ticker the feed can actually chant. The point is not polished branding. The point is to give launch day a language people want to steal and repost.',
+  heroLine: 'They brought another roadmap. Glitch Season brought a phrase the feed can’t stop repeating.',
+  memeDNA: ['weaponized timeline chaos', 'reply-native launch language', 'one chantable ticker', 'anti-copycat posture', 'screenshot-friendly identity'],
+  nameOptions: ['Glitch Season', 'Printer Hours', 'Cartel Loop', 'Terminal Gospel', 'Agenda Gym'],
+  tickerOptions: ['$GLCH', '$PRNTR', '$LOOP', '$GOSPL', '$AGND'],
   lore: [
-    'Born from the depths of the timeline, this meme chose coordination over chaos.',
-    'When AI met meme culture, something sticky happened. Sloan wants to package that momentum.',
-    'Not just another token. A launch with identity, posture, and a community reason to care.',
+    'It started as something the feed could laugh at, then turned into something people kept repeating anyway.',
+    'The joke is sharp enough to spread, and weird enough to survive the first wave of copycats.',
+    'If people can quote it, mock it, and still keep posting the ticker, the launch is alive.',
   ],
-  slogans: ['Memes made smarter', 'AI-powered, community-driven', 'Where intelligence meets internet culture'],
-  communityHooks: ['Give the timeline one phrase it repeats back.', 'Make the replies feel like a tribe, not random noise.', 'Reward the first people who spread the meme language.'],
-  ritualIdeas: ['Run a daily cult check-in at one fixed hour.', 'Use one signature reply on every milestone post.', 'Turn every green candle into a screenshot ritual.'],
-  enemyFraming: ['Against lifeless copy-paste launches.', 'Built for people tired of empty meme shells.'],
-  launchCopy: ['Introducing a meme launch built for attention, conviction, and community coordination.'],
-  launchChecklist: ['Lock the hero line before launch.', 'Prepare 3 posts and 5 replies.', 'Decide your first rivalry and first ritual.'],
-  aestheticDirection: ['Cyber minimalist with neon signal', 'Bold mascot system', 'Terminal inspired visuals'],
+  slogans: ['Say less. Post $GLCH.', 'Not another launch. A phrase.', 'They brought another roadmap. We brought a chant.', '$GLCH or stay in the replies.'],
+  communityHooks: ['Chant line: “$GLCH is the only one with a pulse.”', 'Make the first 10 replies sound like one movement, not random noise.', 'Turn Glitch into the inside-word people keep repeating under every post.'],
+  ritualIdeas: ['Post one identical daily check-in at the same hour.', 'Use one repeated screenshot layout so every repost looks coordinated.', 'Pick one slogan and make it the default reply under every milestone.'],
+  enemyFraming: ['Against copy-paste launches with no soul.', 'Built to embarrass generic launch theatre.'],
+  launchCopy: ['Introducing Glitch Season. Not utility theatre. Just a phrase, a posture, and a ticker the feed can chant: $GLCH.', 'Glitch Season is for people tired of launches that look finished before they even begin.', 'One clean enemy. One clean phrase. One clean attention window.'],
+  launchChecklist: ['Lock one lead name and one chantable ticker before touching visuals.', 'Choose the single enemy line the launch will repeat all day.', 'Prepare the first post plus three replies that all sound like the same movement.', 'Keep the launch window tight so the meme, the enemy, and the phrase land together.'],
+  aestheticDirection: ['High contrast terminal energy', 'war-room screenshots built for reposts', 'one mascot or symbol used everywhere'],
 };
 
 function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }) {

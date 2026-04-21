@@ -165,7 +165,7 @@ export function QuestDetailPage() {
 
       <SectionHeader
         title={selectedQuest.title}
-        subtitle="Quest detail page for the demo loop. Join, submit proof, and use back navigation to return to the full queue."
+        subtitle="Quest detail page. Join, submit proof, and use back navigation to return to the full queue."
         icon={<Megaphone className="w-5 h-5" />}
       />
 
@@ -323,7 +323,7 @@ export function QuestDetailPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState icon={<Megaphone className="w-7 h-7" />} title="No activity yet" description="Join the mission or submit proof to make this feed move during the demo." />
+              <EmptyState icon={<Megaphone className="w-7 h-7" />} title="No activity yet" description="Join the mission or submit proof to start activity on this quest." />
             )}
           </div>
 

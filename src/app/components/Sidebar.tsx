@@ -10,6 +10,7 @@ import {
   Settings
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
+import { BrandMark } from './BrandMark';
 
 const baseNavItems = [
   { path: '/dashboard', label: 'Command Center', icon: LayoutDashboard },
@@ -27,7 +28,7 @@ export function Sidebar() {
   const { profile } = useAuth();
   const navItems = [
     ...baseNavItems.slice(0, 6),
-    { path: `/dashboard/passport/${profile?.username || 'current_user'}`, label: 'Passport', icon: Fingerprint },
+    { path: profile?.username ? `/dashboard/passport/${profile.username}` : '/auth?next=/dashboard', label: 'Passport', icon: Fingerprint },
     baseNavItems[6],
   ];
 
@@ -35,9 +36,7 @@ export function Sidebar() {
     <aside className="w-64 border-r border-border-subtle bg-sidebar flex flex-col h-full">
       <div className="p-6 border-b border-border-subtle">
         <Link to="/dashboard" className="flex items-center gap-3 group">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary via-secondary to-primary bg-[length:200%_200%] animate-[gradient_3s_ease_infinite] flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-primary-foreground" />
-          </div>
+          <BrandMark size={40} roundedClassName="rounded-lg" />
           <div>
             <h1 className="text-xl tracking-tight text-foreground group-hover:text-primary transition-colors">Sloan</h1>
             <p className="text-xs text-muted-foreground font-mono">Four.meme OS</p>
@@ -65,7 +64,7 @@ export function Sidebar() {
             <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
             <span className="text-xs text-muted-foreground">System Status</span>
           </div>
-          <p className="text-sm text-foreground">All systems operational</p>
+          <p className="text-sm text-foreground">{profile ? `Signed in as @${profile.username}` : 'Sign in to save your activity'}</p>
         </div>
       </div>
     </aside>

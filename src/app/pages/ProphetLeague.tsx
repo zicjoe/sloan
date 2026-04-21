@@ -86,7 +86,7 @@ function getOutcomeLabel(prediction: Prediction) {
 export function ProphetLeague() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { profile, isAuthenticated } = useAuth();
-  const username = profile?.username || 'current_user';
+  const username = profile?.username || '';
   const [refreshKey, setRefreshKey] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
 

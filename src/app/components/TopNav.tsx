@@ -7,7 +7,7 @@ export function TopNav() {
   const [searchFocused, setSearchFocused] = useState(false);
   const navigate = useNavigate();
   const { isAuthenticated, profile, signOut } = useAuth();
-  const passportPath = profile?.username ? `/dashboard/passport/${profile.username}` : '/auth?next=/dashboard/passport/current_user';
+  const passportPath = profile?.username ? `/dashboard/passport/${profile.username}` : '/auth?next=/dashboard';
 
   async function handleProfileClick() {
     if (!isAuthenticated) {

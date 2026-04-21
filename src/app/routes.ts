@@ -2,7 +2,6 @@ import { createBrowserRouter } from 'react-router';
 import { Layout } from './components/Layout';
 import { AuthPage } from './pages/AuthPage';
 import { Landing } from './pages/Landing';
-import { Home } from './pages/Home';
 import { CommandCenter } from './pages/CommandCenter';
 import { TokenPage } from './pages/TokenPage';
 import { LaunchForge } from './pages/LaunchForge';
@@ -14,6 +13,10 @@ import { ProphetLeague } from './pages/ProphetLeague';
 import { MirrorFeed } from './pages/MirrorFeed';
 import { PassportPage } from './pages/PassportPage';
 import { Settings } from './pages/Settings';
+import { RoadmapPage } from './pages/RoadmapPage';
+import { TermsPage } from './pages/TermsPage';
+import { PrivacyPage } from './pages/PrivacyPage';
+import { DisclaimerPage } from './pages/DisclaimerPage';
 import { NotFound } from './pages/NotFound';
 
 export const router = createBrowserRouter([
@@ -26,11 +29,26 @@ export const router = createBrowserRouter([
     Component: AuthPage,
   },
   {
+    path: '/roadmap',
+    Component: RoadmapPage,
+  },
+  {
+    path: '/terms',
+    Component: TermsPage,
+  },
+  {
+    path: '/privacy',
+    Component: PrivacyPage,
+  },
+  {
+    path: '/disclaimer',
+    Component: DisclaimerPage,
+  },
+  {
     path: '/dashboard',
     Component: Layout,
     children: [
       { index: true, Component: CommandCenter },
-      { path: 'classic', Component: Home },
       { path: 'token/:slug', Component: TokenPage },
       { path: 'forge', Component: LaunchForge },
       { path: 'raid-studio', Component: RaidStudio },

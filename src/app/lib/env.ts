@@ -1,7 +1,7 @@
 export const env = {
   apiBaseUrl: (import.meta.env.VITE_API_BASE_URL || '').trim(),
-  useMockApi: (import.meta.env.VITE_USE_MOCK_API || 'true').toLowerCase() !== 'false',
-  currentUser: import.meta.env.VITE_CURRENT_USER || 'current_user',
+  useMockApi: (import.meta.env.VITE_USE_MOCK_API || 'false').toLowerCase() === 'true',
+  currentUser: import.meta.env.VITE_CURRENT_USER || 'guest',
   supabaseUrl: (import.meta.env.VITE_SUPABASE_URL || '').trim(),
   supabaseAnonKey: (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim(),
   supabaseFunctionsBaseUrl: (import.meta.env.VITE_SUPABASE_FUNCTIONS_URL || '').trim(),

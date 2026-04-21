@@ -23,8 +23,8 @@ export const mockUserProfiles: Record<string, UserProfile> = {
     joinedDate: '2026-02-03',
     badges: ['Top Prophet', 'Meme Master', 'Quest Warrior'],
   },
-  'current_user': {
-    username: 'current_user',
+  'guest': {
+    username: 'guest',
     displayName: 'You',
     archetype: 'Rising Prophet',
     prophetRank: 12,

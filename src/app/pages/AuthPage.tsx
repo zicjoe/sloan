@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, Navigate, useLocation } from 'react-router';
-import { Sparkles, Loader2, ArrowLeft, ShieldCheck } from 'lucide-react';
+import { Loader2, ArrowLeft } from 'lucide-react';
+import { BrandMark } from '../components/BrandMark';
 import { useAuth } from '../auth/AuthContext';
 import { hasSupabaseBackend } from '../lib/env';
 
@@ -60,19 +61,17 @@ export function AuthPage() {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="w-full max-w-xl">
         <div className="p-8 rounded-2xl border border-card-border bg-card space-y-6">
-          <Link to="/dashboard" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
+          <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
             <ArrowLeft className="w-4 h-4" />
             Back to Sloan
           </Link>
           <div className="space-y-3">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary via-secondary to-primary flex items-center justify-center">
-              <Sparkles className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <h1 className="text-3xl text-foreground">Make Sloan real</h1>
+            <BrandMark size={48} roundedClassName="rounded-xl" />
+            
             <p className="text-muted-foreground leading-relaxed">
-              Sign in to turn predictions, quests, Forge packs, and Passport activity into a real persistent profile instead of browser-only demo state.
+              Sign in to save predictions, quests, Forge packs, and Passport activity to your real profile.
             </p>
           </div>
 
@@ -92,11 +91,11 @@ export function AuthPage() {
               <>
                 <div>
                   <label className="block text-sm text-muted-foreground mb-2">Display name</label>
-                  <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Prompt Gym" className="w-full px-4 py-3 rounded-lg bg-input-background border border-border text-foreground focus:border-primary focus:outline-none" />
+                  <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Sloan Operator" className="w-full px-4 py-3 rounded-lg bg-input-background border border-border text-foreground focus:border-primary focus:outline-none" />
                 </div>
                 <div>
                   <label className="block text-sm text-muted-foreground mb-2">Username</label>
-                  <input value={username} onChange={(event) => setUsername(slugifyUsername(event.target.value))} placeholder="prompt_gym" className="w-full px-4 py-3 rounded-lg bg-input-background border border-border text-foreground focus:border-primary focus:outline-none" />
+                  <input value={username} onChange={(event) => setUsername(slugifyUsername(event.target.value))} placeholder="sloan_operator" className="w-full px-4 py-3 rounded-lg bg-input-background border border-border text-foreground focus:border-primary focus:outline-none" />
                 </div>
               </>
             )}
@@ -117,7 +116,7 @@ export function AuthPage() {
               {mode === 'signin' ? 'Sign in to Sloan' : 'Create Sloan account'}
             </button>
           </form>
-
+{/*
           <div className="relative">
             <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
             <div className="relative flex justify-center"><span className="bg-card px-3 text-xs text-muted-foreground uppercase tracking-[0.2em]">or</span></div>
@@ -126,31 +125,10 @@ export function AuthPage() {
           <button type="button" onClick={handleGoogle} disabled={submitting || !hasSupabaseBackend} className="w-full px-4 py-3 rounded-lg border border-border hover:border-primary/40 transition-all disabled:opacity-50">
             Continue with Google
           </button>
-        </div>
-
-        <div className="p-8 rounded-2xl border border-card-border bg-gradient-to-br from-background-elevated via-background-subtle to-background-elevated space-y-6">
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-full border border-primary/20 bg-primary/10 text-primary text-sm">
-            <ShieldCheck className="w-4 h-4" />
-            Production foundation step 1
-          </div>
-          <h2 className="text-2xl text-foreground leading-tight">Auth, profiles, and real identity before the rest of production hardening</h2>
-          <p className="text-muted-foreground leading-relaxed">
-            This step makes Sloan stop pretending every action belongs to <span className="text-foreground">current_user</span>. From here, Quest Arena, Prophet League, Mirror Feed, and Passport can move to real persistence and RLS-safe ownership.
-          </p>
-          <div className="space-y-4">
-            {[
-              'Session persistence with Supabase Auth',
-              'Real profile row created for each user',
-              'Settings page ready to save live display name, username, and bio',
-              'Top nav and Passport route now follow the authenticated profile',
-            ].map((item) => (
-              <div key={item} className="p-4 rounded-xl bg-card border border-card-border text-sm text-foreground">
-                {item}
-              </div>
-            ))}
-          </div>
+          */}
         </div>
       </div>
     </div>
   );
+
 }

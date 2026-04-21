@@ -10,7 +10,7 @@ export interface AuthActor {
 let currentActor: AuthActor = {
   userId: env.currentUser,
   username: env.currentUser,
-  displayName: 'You',
+  displayName: 'Guest',
   isAuthenticated: false,
 };
 
@@ -23,7 +23,7 @@ export function setCurrentActor(actor: Partial<AuthActor> | null) {
     currentActor = {
       userId: env.currentUser,
       username: env.currentUser,
-      displayName: 'You',
+      displayName: 'Guest',
       isAuthenticated: false,
     };
     return currentActor;
@@ -32,7 +32,7 @@ export function setCurrentActor(actor: Partial<AuthActor> | null) {
   currentActor = {
     userId: actor.userId || env.currentUser,
     username: actor.username || env.currentUser,
-    displayName: actor.displayName || actor.username || 'You',
+    displayName: actor.displayName || actor.username || 'Guest',
     isAuthenticated: Boolean(actor.isAuthenticated),
   };
   return currentActor;

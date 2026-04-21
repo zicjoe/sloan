@@ -144,7 +144,7 @@ export function QuestArena() {
                 <h3 className="text-foreground text-lg">Live Mission Queue</h3>
                 <p className="text-sm text-muted-foreground">Published owner quests appear first. Sloan fallback quests only appear when a token has no operator-led mission live yet.</p>
               </div>
-              <span className="px-2.5 py-1 rounded-full text-xs border bg-primary/10 text-primary border-primary/20">route-based demo</span>
+              <span className="px-2.5 py-1 rounded-full text-xs border bg-primary/10 text-primary border-primary/20">Live quest route</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredQuests.map((quest) => (
