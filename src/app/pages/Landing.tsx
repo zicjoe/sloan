@@ -93,7 +93,7 @@ export function Landing() {
         <div className="max-w-6xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 text-primary text-sm mb-8 animate-fade-in">
             <Zap className="w-4 h-4" />
-            <span>Built for Four.meme AI Sprint</span>
+            <span>Built for Four.meme</span>
           </div>
 
           <h1 className="text-5xl md:text-6xl lg:text-7xl mb-6 bg-gradient-to-b from-foreground via-foreground to-foreground/60 bg-clip-text text-transparent leading-[1.05] animate-fade-in">
