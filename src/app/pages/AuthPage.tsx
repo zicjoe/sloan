@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, Navigate, useLocation } from 'react-router';
-import { Sparkles, Loader2, ArrowLeft } from 'lucide-react';
+import { Loader2, ArrowLeft } from 'lucide-react';
+import { BrandMark } from '../components/BrandMark';
 import { useAuth } from '../auth/AuthContext';
 import { hasSupabaseBackend } from '../lib/env';
 
@@ -67,9 +68,7 @@ export function AuthPage() {
             Back to Sloan
           </Link>
           <div className="space-y-3">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary via-secondary to-primary flex items-center justify-center">
-              <Sparkles className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <BrandMark size={48} roundedClassName="rounded-xl" />
             <h1 className="text-3xl text-foreground">Make Sloan real</h1>
             <p className="text-muted-foreground leading-relaxed">
               Sign in to save predictions, quests, Forge packs, and Passport activity to your real profile.
@@ -117,7 +116,7 @@ export function AuthPage() {
               {mode === 'signin' ? 'Sign in to Sloan' : 'Create Sloan account'}
             </button>
           </form>
-{/*
+
           <div className="relative">
             <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
             <div className="relative flex justify-center"><span className="bg-card px-3 text-xs text-muted-foreground uppercase tracking-[0.2em]">or</span></div>
@@ -126,7 +125,6 @@ export function AuthPage() {
           <button type="button" onClick={handleGoogle} disabled={submitting || !hasSupabaseBackend} className="w-full px-4 py-3 rounded-lg border border-border hover:border-primary/40 transition-all disabled:opacity-50">
             Continue with Google
           </button>
-          */}
         </div>
       </div>
     </div>
