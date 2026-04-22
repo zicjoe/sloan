@@ -117,7 +117,7 @@ export function AuthPage() {
               {mode === 'signin' ? 'Sign in to Sloan' : 'Create Sloan account'}
             </button>
           </form>
-
+{/*
           <div className="relative">
             <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
             <div className="relative flex justify-center"><span className="bg-card px-3 text-xs text-muted-foreground uppercase tracking-[0.2em]">or</span></div>
@@ -126,6 +126,7 @@ export function AuthPage() {
           <button type="button" onClick={handleGoogle} disabled={submitting || !hasSupabaseBackend} className="w-full px-4 py-3 rounded-lg border border-border hover:border-primary/40 transition-all disabled:opacity-50">
             Continue with Google
           </button>
+          */}
         </div>
       </div>
     </div>
